@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Training Station 3D</title>
+<style>
+  :root { --bg:#eef1f3; --ink:#1d2329; --muted:#5a636b; --card:#ffffffee; --line:#c9cdd0; --accent:#0b5cad; --warn:#c62828; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#15191d; --ink:#e8ecef; --muted:#9aa3ab; --card:#1f252bee; --line:#39424a; --accent:#6fb0ff; --warn:#ff6b6b; } }
+  :root[data-theme="dark"] { --bg:#15191d; --ink:#e8ecef; --muted:#9aa3ab; --card:#1f252bee; --line:#39424a; --accent:#6fb0ff; --warn:#ff6b6b; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink); font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  .bar { position:fixed; left:12px; right:12px; top:12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; pointer-events:none; }
+  .title { pointer-events:auto; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-weight:700; font-size:14px; line-height:1.25; }
+  .title small { display:block; font-weight:500; color:var(--muted); font-size:11.5px; }
+  .btns { pointer-events:auto; display:flex; flex-wrap:wrap; gap:6px; }
+  button { font:inherit; font-size:13px; font-weight:600; padding:8px 12px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .ctl { position:fixed; left:12px; bottom:12px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:12.5px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; max-width:calc(100% - 48px); }
+  .ctl input[type=range] { width:130px; }
+  #tip { position:fixed; right:12px; bottom:12px; max-width:min(380px, calc(100% - 48px)); background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:13px; display:none; box-shadow:0 6px 24px #0002; }
+  #tip b { font-size:14px; } #tip .pn { color:var(--accent); font-weight:700; } #tip .m { color:var(--muted); }
+  #tip .lo { color:var(--warn); font-weight:700; } #tip .src { display:inline-block; margin-top:4px; padding:1px 7px; border-radius:6px; border:1px solid var(--line); font-size:11.5px; font-weight:700; }
+  #load { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 14px; font-size:13px; }
+  .draft { position:fixed; right:12px; top:12px; font-size:11px; font-weight:800; color:var(--warn); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:5px 8px; }
+  body.still .bar, body.still .ctl, body.still #tip, body.still #load { display:none; }
+  body.still .draft { top:auto; bottom:10px; right:12px; font-size:10px; font-weight:700; color:#9aa0a6; background:none; border:none; padding:0; letter-spacing:.06em; }
+  html, body { background:#ffffff; }
+  @media (max-width: 640px) { .title { font-size:13px; } button { padding:7px 10px; font-size:12px; } .draft { top:auto; bottom:96px; } .ctl input[type=range] { width:90px; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="ov" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
+<div class="bar">
+  <div class="title">HVAC Controls Training Station <small id="cap"></small></div>
+  <div class="btns">
+    <button data-v="iso_open" class="on">Panel open</button><button data-v="iso_front">Iso front</button><button data-v="front">Front</button><button data-v="exploded">Exploded</button>
+    <button id="skin">M4 black</button><button id="feed">Feed: cord (A)</button>
+  </div>
+</div>
+<div class="draft">DRAFT</div>
+<div class="ctl">
+  <label>Swing panel <input id="ang" type="range" min="0" max="94" value="30"> <span id="angv">30</span>&deg;</label>
+  <label>Door <input id="dang" type="range" min="0" max="210" value="150"> <span id="dangv">150</span>&deg;</label>
+  <label>Explode <input id="expl" type="range" min="0" max="100" value="0"> <span id="explv">0</span>%</label>
+  <label><input id="wall" type="checkbox"> Cut right wall</label>
+  <label><input id="bal" type="checkbox"> Balloons</label>
+  <label><input id="tags" type="checkbox"> Tags</label>
+  <label><input id="wires" type="checkbox"> Show wires</label>
+  <label><input id="ductcb" type="checkbox" checked> Show wire duct</label>
+  <label><input id="covers" type="checkbox" checked> Duct covers</label>
+</div>
+<div id="tip"></div>
+<div id="load">Loading models...</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/environments/RoomEnvironment.js"></script>
+<script src="models.js?v=20261031b"></script>
+<script>
+const DATA = {"panel":{"w":21.75,"h":27.72,"t":0.075,"flange":0.75,"edge":0.5},"encl":{"w":24.0,"h":30.0,"d":12.0,"inside_w":23.88,"usable":10.9,"setback":4.0,"hinge_gap":1.0649999999999995,"swing_max":94},"parts":[{"tag":"M1","name":"1/8 DIN panel meter, +/-10 V input (0-10 V used), scalable, 20-265 VAC power (24 VAC used), 3 W","pn":"DPM2-AT-HL","mfr":"AutomationDirect","x":6.518,"y":0.75,"w":3.78,"h":1.89,"front":0.47,"behind":3.27,"kind":"meter","conf":"MED","color":"#151515","shape":"rect","cut":[3.622,1.772],"label":"ZN-T","disp":"72.0","model":"modeled"},{"tag":"M2","name":"1/8 DIN panel meter, +/-10 V input (0-10 V used), scalable, 20-265 VAC power (24 VAC used), 3 W","pn":"DPM2-AT-HL","mfr":"AutomationDirect","x":6.518,"y":2.95,"w":3.78,"h":1.89,"front":0.47,"behind":3.27,"kind":"meter","conf":"MED","color":"#151515","shape":"rect","cut":[3.622,1.772],"label":"DPR %","disp":"45","model":"modeled"},{"tag":"M3","name":"1/8 DIN panel meter, +/-10 V input (0-10 V used), scalable, 20-265 VAC power (24 VAC used), 3 W","pn":"DPM2-AT-HL","mfr":"AutomationDirect","x":6.518,"y":5.15,"w":3.78,"h":1.89,"front":0.47,"behind":3.27,"kind":"meter","conf":"MED","color":"#151515","shape":"rect","cut":[3.622,1.772],"label":"SA-F","disp":"55.2","model":"modeled"},{"tag":"RLY-RAIL","name":"Relay rail: 4x Zelio relays on sockets + 0-10 V manual source","pn":"NS 35/7,5 PERF 0801733","mfr":"Phoenix Contact","x":11.915,"y":2.1,"w":6.300000000000001,"h":3.54,"front":3.03,"behind":0.0,"kind":"rlyrail","conf":"MED","color":"#b8bcc0","shape":"rect","relays":[{"tag":"CR-1","x":12.449,"w":1.059,"h":3.339},{"tag":"CR-2","x":13.568,"w":1.059,"h":3.339},{"tag":"CR-3","x":14.687,"w":1.059,"h":3.339},{"tag":"CR-4","x":15.806,"w":1.059,"h":3.339}],"ao":{"tag":"AO-1","x":16.985,"w":0.69,"h":3.54},"model":"modeled"},{"tag":"CR-1","name":"Ice-cube relay 2 C/O 24 VAC coil, LED + lockable test button, on socket","pn":"RXM2AB2B7 + RXZE2S108M + RXM040W","mfr":"Schneider Electric","x":12.449,"y":1.955,"w":1.059,"h":3.339,"front":3.03,"behind":0.0,"kind":"relay","conf":"MED","color":"#c7d3dc","shape":"rect","sub":true,"model":"vendor 3D"},{"tag":"CR-2","name":"Ice-cube relay 2 C/O 24 VAC coil, LED + lockable test button, on socket","pn":"RXM2AB2B7 + RXZE2S108M + RXM040W","mfr":"Schneider Electric","x":13.568,"y":1.955,"w":1.059,"h":3.339,"front":3.03,"behind":0.0,"kind":"relay","conf":"MED","color":"#c7d3dc","shape":"rect","sub":true,"model":"vendor 3D"},{"tag":"CR-3","name":"Ice-cube relay 2 C/O 24 VAC coil, LED + lockable test button, on socket","pn":"RXM2AB2B7 + RXZE2S108M + RXM040W","mfr":"Schneider Electric","x":14.687,"y":1.955,"w":1.059,"h":3.339,"front":3.03,"behind":0.0,"kind":"relay","conf":"MED","color":"#c7d3dc","shape":"rect","sub":true,"model":"vendor 3D"},{"tag":"CR-4","name":"Ice-cube relay 2 C/O 24 VAC coil, LED + lockable test button, on socket","pn":"RXM2AB2B7 + RXZE2S108M + RXM040W","mfr":"Schneider Electric","x":15.806,"y":1.955,"w":1.059,"h":3.339,"front":3.03,"behind":0.0,"kind":"relay","conf":"MED","color":"#c7d3dc","shape":"rect","sub":true,"model":"vendor 3D"},{"tag":"AO-1","name":"0-10 VDC manual signal source, Auto/Hand + pot, 24 VAC/DC","pn":"19.50.0.024.0000","mfr":"Finder","x":16.985,"y":2.1,"w":0.69,"h":3.54,"front":2.6,"behind":0.0,"kind":"ao","conf":"MED","color":"#5d6670","shape":"rect","sub":true,"model":"modeled"},{"tag":"TP-FCU-1","name":"General purpose controller, MS/TP, 7UI 2BI 3BO 2AO 4CO","pn":"M4-CGM09090-0","mfr":"Johnson Controls","x":5.0,"y":9.04,"w":7.48,"h":4.92,"front":2.43,"behind":0.0,"kind":"ctrl","conf":"MED","color":"#2a2d30","shape":"rect","model":"photo","photo":"cgm09090_front.png"},{"tag":"TP-XPM-1","name":"I/O expansion module on SA bus, 4 in / 6 out","pn":"M4-XPM04060-0","mfr":"Johnson Controls","x":12.78,"y":9.04,"w":5.91,"h":4.92,"front":2.05,"behind":0.0,"kind":"ctrl","conf":"MED","color":"#2a2d30","shape":"rect","model":"photo","photo":"xpm04060_front.png","note":"5.91 W x 4.92 H x 1.75 D (150 W x 125 H x 44.5 D mm, field-confirmed); top and bottom aligned with the CGM; DIN mount"},{"tag":"TP-VAV-1","name":"VAV controller, integral actuator + DP flow sensor","pn":"M4-CVM03050-0","mfr":"Johnson Controls","x":5.0,"y":15.89,"w":6.5,"h":4.92,"front":2.87,"behind":0.0,"kind":"cvm","conf":"MED","color":"#2a2d30","shape":"rect","note":"landscape 6.50 W (incl. ears) x 4.92 H per JCI 165 x 125 mm; screw-mounted by its ears (no DIN rail); set-screw hub in the right ear moves visibly on its own (no shaft stub, no bearing); front 2.87 body","model":"photo","photo":"cvm_front.png"},{"tag":"ACT-1","name":"Damper actuator 45 in-lb, 24 V, 2-10 V in / 2-10 V feedback, terminal block; mounted by its anti-rotation tab, clamp free","pn":"LMB24-SR-T","mfr":"Belimo","x":11.9,"y":17.06,"w":6.57,"h":2.6,"front":2.44,"behind":0.0,"kind":"act","conf":"LOW","color":"#f08a00","shape":"rect","note":"overall 6.57 L x 2.60 W x 2.34 H; housing 116 x 66 mm; anti-rotation bracket/tab screwed to the panel (0.10 in spacer), no shaft: the clamp turns freely so trainees see it move; built-in position indicator","model":"photo","photo":"lmb24-sr-t_front.png"},{"tag":"TB-1","name":"Face DIN rail: PANEL POWER 2-pole switch, fused 24 VAC section (2 fuses, 6 red), COM / ground test section (6 black, 3 PE), 5 gray spares, FC BUS A / FC BUS B UT 4 blue / white (8)","pn":"NS 35/7,5 PERF 0801733 + FAZ-C4/2-NA + UT 4","mfr":"Phoenix Contact / Eaton","x":4.4,"y":22.82,"w":10.1,"h":3.15,"front":2.97,"behind":0.0,"kind":"tbrail","conf":"MED","color":"#b8bcc0","shape":"rect","blocks":[{"tag":"TB1-EC1","kind":"End clamp","x":4.5,"w":0.374,"len":1.4,"front":1.4,"color":"#555555"},{"tag":"TB1-SW","kind":"SW","x":4.874,"w":1.38,"len":3.15,"front":2.97,"color":"#e8e8e4"},{"tag":"TB1-F1","kind":"HESI","x":6.254,"w":0.323,"len":2.8,"front":2.4,"color":"#7a7f84"},{"tag":"TB1-F2","kind":"HESI","x":6.577,"w":0.323,"len":2.8,"front":2.4,"color":"#7a7f84"},{"tag":"TB1-R1","kind":"RD","x":6.9,"w":0.244,"len":1.88,"front":1.87,"color":"#c62828"},{"tag":"TB1-R2","kind":"RD","x":7.144,"w":0.244,"len":1.88,"front":1.87,"color":"#c62828"},{"tag":"TB1-R3","kind":"RD","x":7.388,"w":0.244,"len":1.88,"front":1.87,"color":"#c62828"},{"tag":"TB1-R4","kind":"RD","x":7.632,"w":0.244,"len":1.88,"front":1.87,"color":"#c62828"},{"tag":"TB1-R5","kind":"RD","x":7.876,"w":0.244,"len":1.88,"front":1.87,"color":"#c62828"},{"tag":"TB1-R6","kind":"RD","x":8.12,"w":0.244,"len":1.88,"front":1.87,"color":"#c62828"},{"tag":"TB1-K1","kind":"BK","x":8.364,"w":0.244,"len":1.88,"front":1.87,"color":"#202020"},{"tag":"TB1-K2","kind":"BK","x":8.608,"w":0.244,"len":1.88,"front":1.87,"color":"#202020"},{"tag":"TB1-K3","kind":"BK","x":8.852,"w":0.244,"len":1.88,"front":1.87,"color":"#202020"},{"tag":"TB1-K4","kind":"BK","x":9.096,"w":0.244,"len":1.88,"front":1.87,"color":"#202020"},{"tag":"TB1-K5","kind":"BK","x":9.34,"w":0.244,"len":1.88,"front":1.87,"color":"#202020"},{"tag":"TB1-K6","kind":"BK","x":9.584,"w":0.244,"len":1.88,"front":1.87,"color":"#202020"},{"tag":"TB1-PE1","kind":"PE","x":9.828,"w":0.244,"len":1.88,"front":1.87,"color":"#3a9a3a"},{"tag":"TB1-PE2","kind":"PE","x":10.072,"w":0.244,"len":1.88,"front":1.87,"color":"#3a9a3a"},{"tag":"TB1-PE3","kind":"PE","x":10.316,"w":0.244,"len":1.88,"front":1.87,"color":"#3a9a3a"},{"tag":"TB1-G1","kind":"GY","x":10.56,"w":0.244,"len":1.88,"front":1.87,"color":"#9ea3a8"},{"tag":"TB1-G2","kind":"GY","x":10.804,"w":0.244,"len":1.88,"front":1.87,"color":"#9ea3a8"},{"tag":"TB1-G3","kind":"GY","x":11.048,"w":0.244,"len":1.88,"front":1.87,"color":"#9ea3a8"},{"tag":"TB1-G4","kind":"GY","x":11.292,"w":0.244,"len":1.88,"front":1.87,"color":"#9ea3a8"},{"tag":"TB1-G5","kind":"GY","x":11.536,"w":0.244,"len":1.88,"front":1.87,"color":"#9ea3a8"},{"tag":"TB1-FCA+","kind":"FCBU","x":11.78,"w":0.244,"len":1.88,"front":1.87,"color":"#2a62b8"},{"tag":"TB1-FCA-","kind":"FCWH","x":12.024,"w":0.244,"len":1.88,"front":1.87,"color":"#f4f4f0"},{"tag":"TB1-FCAC","kind":"FCBU","x":12.268,"w":0.244,"len":1.88,"front":1.87,"color":"#2a62b8"},{"tag":"TB1-FCAS","kind":"FCWH","x":12.512,"w":0.244,"len":1.88,"front":1.87,"color":"#f4f4f0"},{"tag":"TB1-FCB+","kind":"FCBU","x":12.756,"w":0.244,"len":1.88,"front":1.87,"color":"#2a62b8"},{"tag":"TB1-FCB-","kind":"FCWH","x":13.0,"w":0.244,"len":1.88,"front":1.87,"color":"#f4f4f0"},{"tag":"TB1-FCBC","kind":"FCBU","x":13.244,"w":0.244,"len":1.88,"front":1.87,"color":"#2a62b8"},{"tag":"TB1-FCBS","kind":"FCWH","x":13.488,"w":0.244,"len":1.88,"front":1.87,"color":"#f4f4f0"},{"tag":"TB1-EC-COV","kind":"End cover","x":13.732,"w":0.087,"len":1.88,"front":1.87,"color":"#888888"},{"tag":"TB1-EC2","kind":"End clamp","x":13.819,"w":0.374,"len":1.4,"front":1.4,"color":"#555555"}],"model":"modeled","sw_legend":{"x":5.564,"y":26.27,"text":"PANEL POWER"},"fc_legends":[{"x":12.268,"y":26.27,"w":0.94,"text":"FC BUS A"},{"x":13.244,"y":26.27,"w":0.94,"text":"FC BUS B"}]},{"tag":"FAN-1","name":"24 VAC axial fan 4.71 x 4.71 x 1.50 in, 0.3 A, on 1 in standoffs, B-4 finger guards front and back","pn":"FP-108-1-24VAC-ST + 2x B-4","mfr":"Etlin-Daniels","x":16.54,"y":22.5,"w":4.71,"h":4.71,"front":2.8,"behind":0.0,"kind":"fan","conf":"MED","color":"#2b2b2b","shape":"rect","standoff":1.0,"model":"modeled","note":"Fan guarded both sides; keep loose wires clear of the fan when energised. Demo load; 1 in standoffs give free intake, no panel cutout."},{"tag":"PL-PWR","name":"22 mm LED pilot light 24 V AC/DC, white","pn":"XB5AVB1","mfr":"Schneider Electric","x":2.31,"y":0.51,"w":1.18,"h":1.18,"front":0.76,"behind":1.38,"kind":"pilot","conf":"HIGH","color":"#f4f4f4","shape":"circle","hole":0.88,"legend":"24 VAC ON","legend_dy":0.89,"model":"vendor 3D","glb":"XB5AVB1"},{"tag":"PL-FAN","name":"22 mm LED pilot light 24 V AC/DC, green","pn":"XB5AVB3","mfr":"Schneider Electric","x":4.06,"y":0.51,"w":1.18,"h":1.18,"front":0.76,"behind":1.38,"kind":"pilot","conf":"HIGH","color":"#2e9e4f","shape":"circle","hole":0.88,"legend":"FAN RUN","legend_dy":0.89,"model":"vendor 3D","glb":"XB5AVB3"},{"tag":"PL-ALM","name":"22 mm LED pilot light 24 V AC/DC, red","pn":"XB5AVB4","mfr":"Schneider Electric","x":2.31,"y":2.31,"w":1.18,"h":1.18,"front":0.76,"behind":1.38,"kind":"pilot","conf":"HIGH","color":"#d32f2f","shape":"circle","hole":0.88,"legend":"ALARM","legend_dy":0.89,"model":"vendor 3D","glb":"XB5AVB4"},{"tag":"PL-HOA","name":"22 mm LED pilot light 24 V AC/DC, yellow","pn":"XB5AVB5","mfr":"Schneider Electric","x":4.06,"y":2.31,"w":1.18,"h":1.18,"front":0.76,"behind":1.38,"kind":"pilot","conf":"HIGH","color":"#f2c200","shape":"circle","hole":0.88,"legend":"NOT IN AUTO","legend_dy":0.89,"model":"vendor 3D","glb":"XB5AVB5"},{"tag":"PB-START","name":"22 mm flush pushbutton, momentary, green","pn":"XB5AA31","mfr":"Schneider Electric","x":2.31,"y":4.11,"w":1.18,"h":1.18,"front":0.56,"behind":1.48,"kind":"pb","conf":"HIGH","color":"#2e9e4f","shape":"circle","hole":0.88,"legend":"START","legend_dy":0.89,"model":"vendor 3D","glb":"XB5AA31"},{"tag":"PB-STOP","name":"22 mm flush pushbutton, momentary, red","pn":"XB5AA42","mfr":"Schneider Electric","x":4.06,"y":4.11,"w":1.18,"h":1.18,"front":0.56,"behind":1.48,"kind":"pb","conf":"HIGH","color":"#d32f2f","shape":"circle","hole":0.88,"legend":"STOP","legend_dy":0.89,"model":"vendor 3D","glb":"XB5AA42"},{"tag":"POT-1","name":"10-turn 50k pot + 1k series resistor + turns-counting dial (10K-2 thermistor sim)","pn":"3590S-2-503L + H-22-6A","mfr":"Bourns","x":2.463,"y":6.063,"w":0.874,"h":0.874,"front":1.0,"behind":1.35,"kind":"pot","conf":"MED","color":"#202020","shape":"circle","hole":0.411,"legend":"10K SIM","legend_dy":0.89,"model":"modeled"},{"tag":"SS-HOA","name":"22 mm 3-position selector, maintained (H-O-A)","pn":"XB5AD33","mfr":"Schneider Electric","x":4.06,"y":5.91,"w":1.18,"h":1.18,"front":1.28,"behind":1.48,"kind":"sel","conf":"HIGH","color":"#1d1d1d","shape":"circle","hole":0.88,"legend":"H-O-A","legend_dy":0.89,"model":"vendor 3D","glb":"XB5AD33"},{"tag":"TS-1","name":"Wall temp sensor 10K-2, plain single-gang plate","pn":"BA/10K-2-SP","mfr":"BAPI","x":0.9,"y":9.6,"w":2.75,"h":4.5,"front":0.22,"behind":1.0,"kind":"plate","conf":"LOW","color":"#c9cdd0","shape":"rect","hole":0.875,"model":"modeled"},{"tag":"TP-NS-1","name":"Network sensor NS8000, white, temp + setpoint + display (portrait)","pn":"NSB8BTN240-0","mfr":"Johnson Controls","x":0.6,"y":15.6,"w":3.36,"h":5.02,"front":1.06,"behind":0.4,"kind":"ns","conf":"MED","color":"#f7f7f5","shape":"rect","hole":1.0,"model":"photo","photo":"ns_white_front.png"},{"tag":"FD-1","name":"Slotted wire duct 1 W x 2 D in with cover (under meters / relays)","pn":"G1X2LG6 + C1LG6","mfr":"Panduit","x":4.4,"y":7.6,"w":16.85,"h":1.0,"front":2.0,"behind":0.0,"kind":"duct","conf":"MED","color":"#b9bdc0","shape":"rect","model":"modeled","duct":true},{"tag":"FD-2","name":"Slotted wire duct 1 W x 2 D in with cover (between CGM-XPM and CVM)","pn":"G1X2LG6 + C1LG6","mfr":"Panduit","x":4.4,"y":14.4,"w":16.85,"h":1.0,"front":2.0,"behind":0.0,"kind":"duct","conf":"MED","color":"#b9bdc0","shape":"rect","model":"modeled","duct":true},{"tag":"FD-3","name":"Slotted wire duct 1 W x 2 D in with cover (above TB-1 / fan)","pn":"G1X2LG6 + C1LG6","mfr":"Panduit","x":4.4,"y":21.3,"w":16.85,"h":1.0,"front":2.0,"behind":0.0,"kind":"duct","conf":"MED","color":"#b9bdc0","shape":"rect","model":"modeled","duct":true},{"tag":"TD-1","name":"Slotted wire duct 1 W x 1 D in with cover (above the relay rail)","pn":"G1X1LG6 + C1LG6","mfr":"Panduit","x":11.415,"y":0.6,"w":7.3,"h":1.0,"front":1.0,"behind":0.0,"kind":"duct","conf":"MED","color":"#b9bdc0","shape":"rect","model":"modeled","duct":true}],"bush":[],"tb":{"x0":4.4,"x1":14.5,"y":24.395,"used":9.793},"ducts":[{"tag":"FD-1","x":4.4,"y":7.6,"w":16.85,"h":1.0,"run":"under meters / relays"},{"tag":"FD-2","x":4.4,"y":14.4,"w":16.85,"h":1.0,"run":"between CGM-XPM and CVM"},{"tag":"FD-3","x":4.4,"y":21.3,"w":16.85,"h":1.0,"run":"above TB-1 / fan"},{"tag":"TD-1","x":11.415,"y":0.6,"w":7.3,"h":1.0,"run":"above the relay rail (relay contact wiring)"}],"ctrl_rail":{"x0":4.6,"x1":18.89,"y":11.5},"rear_duct_y":9.1,"slots":[{"tag":"S1","x":5.4,"y":7.85,"w":6.0,"h":0.5,"duct":"FD-1"},{"tag":"S2","x":5.4,"y":14.65,"w":6.0,"h":0.5,"duct":"FD-2"},{"tag":"S3","x":5.4,"y":21.55,"w":6.0,"h":0.5,"duct":"FD-3"},{"tag":"S4","x":12.065,"y":0.85,"w":6.0,"h":0.5,"duct":"TD-1"}],"rear_ducts":[{"tag":"WD-3","x":3.98,"y":8.6,"w":16.42,"h":1.0,"run":"just below slot S1 (behind FD-1 lower edge): meters, pilots, operators, hinge loop"},{"tag":"WD-4","x":4.98,"y":15.4,"w":6.62,"h":1.0,"run":"just below slot S2: CGM field wiring, TS-1"},{"tag":"WD-5","x":0.75,"y":22.3,"w":10.85,"h":1.0,"run":"just below slot S3: TB-1 feeds, NS8000 SA bus"},{"tag":"WD-6","x":3.98,"y":9.6,"w":1.0,"h":13.7,"run":"vertical riser joining WD-3 / WD-4 / WD-5"},{"tag":"WD-7","x":11.0,"y":0.6,"w":1.0,"h":8.0,"run":"beside slot S4 (relay top duct), down to WD-3"}],"tr":{"tag":"TR-1","x":16.5,"y":1.0,"w":4.085,"h":2.515,"depth":3.03},"loop_bp":[2.0,8.1],"swing":{"limit_deg":90.5,"limit_tag":"TP-NS-1","axis_fwd_needed":0.2,"rear_r":10.80470749257008,"rear_tag":"M3","far_wall":22.814999999999998},"wires":[{"id":"W001","color":"red","type":"wire","pts":[[5.224,23.095,2.6],[5.224,22.845,2.75],[5.224,22.3,1.6],[5.224,21.701,0.743],[5.564,21.8,0.6],[5.564,21.8,-0.3],[5.564,22.0,-0.7],[5.564,22.931,-0.8],[4.383,22.931,-0.8],[4.383,9.1,-0.8],[4.1,9.1,-0.8]]},{"id":"W002","color":"black","type":"wire","pts":[[5.904,23.095,2.6],[5.904,22.845,2.75],[5.904,22.3,1.609],[5.904,21.865,1.209],[5.598,21.8,0.6],[5.598,21.8,-0.3],[5.598,22.0,-0.7],[5.598,22.648,-0.8],[4.487,22.648,-0.8],[4.487,9.1,-0.8],[4.1,9.1,-0.8]]},{"id":"W003","color":"red","type":"jumper","pts":[[5.224,25.695,2.6],[5.82,25.775,2.44],[6.415,25.495,1.78]]},{"id":"W004","color":"red","type":"jumper","pts":[[6.415,25.495,1.78],[6.577,25.675,2.03],[6.739,25.495,1.78]]},{"id":"W005","color":"black","type":"jumper","pts":[[5.904,25.695,2.6],[7.195,25.585,2.44],[8.486,25.115,1.78]]},{"id":"W006","color":"green","type":"wire","pts":[[9.95,23.675,1.78],[9.95,23.425,1.93],[9.95,22.3,1.6],[9.95,21.671,1.09],[15.4,21.671,1.09],[15.4,22.3,1.6],[15.4,26.05,0.25],[15.4,26.3,0.1]]},{"id":"W007","color":"red","type":"wire","pts":[[7.022,23.675,1.78],[7.022,23.425,1.93],[7.022,22.3,1.6],[7.022,22.027,1.12],[5.573,21.8,0.6],[5.573,21.8,-0.3],[5.573,22.0,-0.7],[5.573,22.719,-0.8],[4.56,22.719,-0.8],[4.438,9.09,-0.8],[5.997,9.09,-0.8],[5.997,8.3,-0.7],[5.997,8.1,-0.3],[5.997,8.1,0.6],[11.85,8.327,1.12],[11.85,8.6,1.6],[11.85,9.11,2.53],[11.85,9.36,2.38]]},{"id":"W008","color":"black","type":"wire","pts":[[8.73,23.675,1.78],[8.73,23.425,1.93],[8.73,22.3,1.6],[8.73,22.044,1.11],[6.047,21.8,0.6],[6.047,21.8,-0.3],[6.047,22.0,-0.7],[6.047,22.65,-0.8],[4.538,22.65,-0.8],[4.562,9.005,-0.8],[5.786,9.005,-0.8],[5.786,8.3,-0.7],[5.786,8.1,-0.3],[5.786,8.1,0.6],[12.05,8.344,1.11],[12.05,8.6,1.6],[12.05,9.11,2.53],[12.05,9.36,2.38]]},{"id":"W009","color":"red","type":"wire","pts":[[7.266,23.675,1.78],[7.266,23.425,1.93],[7.266,22.3,1.6],[7.266,21.849,1.024],[5.904,21.8,0.6],[5.904,21.8,-0.3],[5.904,22.0,-0.7],[5.904,22.611,-0.8],[4.519,22.611,-0.8],[4.561,8.922,-0.8],[5.998,8.922,-0.8],[5.998,8.3,-0.7],[5.998,8.1,-0.3],[5.998,8.1,0.6],[18.13,8.149,1.024],[18.13,8.6,1.6],[18.13,9.11,2.15],[18.13,9.36,2.0]]},{"id":"W010","color":"black","type":"wire","pts":[[8.974,23.675,1.78],[8.974,23.425,1.93],[8.974,22.3,1.6],[8.974,21.96,1.12],[5.665,21.8,0.6],[5.665,21.8,-0.3],[5.665,22.0,-0.7],[5.665,22.994,-0.8],[4.454,22.994,-0.8],[4.561,9.029,-0.8],[5.721,9.029,-0.8],[5.721,8.3,-0.7],[5.721,8.1,-0.3],[5.721,8.1,0.6],[18.33,8.259,1.12],[18.33,8.6,1.6],[18.33,9.11,2.15],[18.33,9.36,2.0]]},{"id":"W011","color":"red","type":"wire","pts":[[7.51,23.675,1.78],[7.51,23.425,1.93],[7.51,22.3,1.6],[7.51,21.571,0.687],[5.712,21.8,0.6],[5.712,21.8,-0.3],[5.712,22.0,-0.7],[5.712,22.803,-0.8],[4.558,22.803,-0.8],[4.44,15.881,-0.8],[5.707,15.881,-0.8],[5.707,15.1,-0.7],[5.707,14.9,-0.3],[5.707,14.9,0.6],[6.1,14.671,0.687],[6.1,15.4,1.6],[6.1,15.96,2.97],[6.1,16.21,2.82]]},{"id":"W012","color":"black","type":"wire","pts":[[9.218,23.675,1.78],[9.218,23.425,1.93],[9.218,22.3,1.6],[9.218,21.863,0.97],[5.646,21.8,0.6],[5.646,21.8,-0.3],[5.646,22.0,-0.7],[5.646,22.619,-0.8],[4.42,22.619,-0.8],[4.48,15.746,-0.8],[5.92,15.746,-0.8],[5.92,15.1,-0.7],[5.92,14.9,-0.3],[5.92,14.9,0.6],[6.3,14.963,0.97],[6.3,15.4,1.6],[6.3,15.96,2.97],[6.3,16.21,2.82]]},{"id":"W013","color":"red","type":"wire","pts":[[7.754,23.675,1.78],[7.754,23.425,1.93],[7.754,22.3,1.6],[7.754,21.666,0.883],[6.001,21.8,0.6],[6.001,21.8,-0.3],[6.001,22.0,-0.7],[6.001,22.981,-0.8],[4.401,22.981,-0.8],[4.499,9.064,-0.8],[5.76,9.064,-0.8],[5.76,8.3,-0.7],[5.76,8.1,-0.3],[5.76,8.1,0.6],[5.95,7.966,0.883],[5.95,8.6,1.6],[5.95,9.11,2.53],[5.95,9.36,2.38]]},{"id":"W014","color":"red","type":"jumper","pts":[[5.95,9.36,2.38],[6.15,9.54,2.63],[6.35,9.36,2.38]]},{"id":"W015","color":"red","type":"jumper","pts":[[6.35,9.36,2.38],[6.55,9.54,2.63],[6.75,9.36,2.38]]},{"id":"W016","color":"red","type":"wire","pts":[[7.754,23.675,1.78],[7.754,23.425,1.93],[7.754,22.3,1.6],[7.754,21.556,1.067],[5.928,21.8,0.6],[5.928,21.8,-0.3],[5.928,22.0,-0.7],[5.928,22.989,-0.8],[4.535,22.989,-0.8],[4.391,8.964,-0.8],[5.866,8.964,-0.8],[5.866,8.3,-0.7],[5.866,8.1,-0.3],[5.866,8.1,0.6],[13.53,7.856,1.067],[13.53,8.6,1.6],[13.53,9.11,2.15],[13.53,9.36,2.0]]},{"id":"W017","color":"red","type":"jumper","pts":[[13.53,9.36,2.0],[13.73,9.54,2.25],[13.93,9.36,2.0]]},{"id":"W018","color":"white","type":"wire","pts":[[5.75,9.36,2.38],[5.75,9.11,2.53],[5.75,8.6,1.736],[5.75,7.871,1.336],[12.749,7.871,1.336],[12.749,7.6,1.736],[12.749,5.324,2.45],[12.749,5.074,2.3]]},{"id":"W019","color":"white","type":"wire","pts":[[6.15,9.36,2.38],[6.15,9.11,2.53],[6.15,8.6,1.6],[6.15,7.983,0.903],[13.868,7.983,0.903],[13.868,7.6,1.6],[13.868,5.324,2.45],[13.868,5.074,2.3]]},{"id":"W020","color":"black","type":"jumper","pts":[[13.199,5.074,2.3],[13.758,5.254,2.55],[14.318,5.074,2.3]]},{"id":"W021","color":"black","type":"jumper","pts":[[14.318,5.074,2.3],[14.877,5.254,2.55],[15.437,5.074,2.3]]},{"id":"W022","color":"black","type":"jumper","pts":[[15.437,5.074,2.3],[15.996,5.254,2.55],[16.556,5.074,2.3]]},{"id":"W023","color":"black","type":"wire","pts":[[13.199,5.074,2.3],[13.199,5.324,2.45],[13.199,7.6,1.6],[13.199,7.886,0.898],[5.886,8.1,0.6],[5.886,8.1,-0.3],[5.886,8.3,-0.7],[5.886,8.938,-0.8],[4.523,8.938,-0.8],[4.467,22.928,-0.8],[5.743,22.928,-0.8],[5.743,22.0,-0.7],[5.743,21.8,-0.3],[5.743,21.8,0.6],[9.462,21.587,0.898],[9.462,22.3,1.6],[9.462,23.425,1.93],[9.462,23.675,1.78]]},{"id":"W028","color":"red","type":"wire","pts":[[7.998,23.675,1.78],[7.998,23.425,1.93],[7.998,22.3,1.6],[7.998,21.939,0.881],[5.82,21.8,0.6],[5.82,21.8,-0.3],[5.82,22.0,-0.7],[5.82,22.908,-0.8],[4.408,22.908,-0.8],[4.408,9.1,-0.8],[4.328,9.1,-0.8],[4.35,7.05,-1.75],[4.35,6.35,-1.75],[4.35,6.35,-1.45]]},{"id":"W029","color":"red","type":"wire","pts":[[4.75,6.35,-1.45],[4.75,6.35,-1.75],[4.75,7.05,-1.75],[4.726,9.1,-0.8],[4.401,9.1,-0.8],[4.401,9.1,-0.8],[11.538,9.1,-0.8],[11.538,1.1,-0.8],[12.482,1.1,-0.75],[12.681,1.1,-0.3],[12.681,1.1,0.5],[12.599,0.884,0.427],[12.599,1.6,0.827],[12.599,1.925,2.45],[12.599,2.175,2.3]]},{"id":"W030","color":"red","type":"wire","pts":[[12.849,2.175,2.3],[12.849,1.925,2.45],[12.849,1.6,1.024],[12.849,1.001,0.624],[12.692,1.1,0.5],[12.692,1.1,-0.3],[12.492,1.1,-0.75],[11.435,1.1,-0.8],[11.435,9.1,-0.8],[4.562,9.1,-0.8],[4.471,22.648,-0.8],[5.869,22.648,-0.8],[5.869,22.0,-0.7],[5.869,21.8,-0.3],[5.869,21.8,0.6],[20.9,21.701,1.248],[20.9,22.3,1.647],[20.9,22.4,2.35],[20.9,22.65,2.2]]},{"id":"W031","color":"red","type":"wire","pts":[[4.55,6.35,-1.45],[4.55,6.35,-1.75],[4.55,7.05,-1.75],[4.55,9.1,-0.8],[4.478,9.1,-0.8],[4.478,22.964,-0.8],[5.915,22.964,-0.8],[5.915,22.0,-0.7],[5.915,21.8,-0.3],[5.915,21.8,0.6],[20.9,21.652,0.872],[20.9,22.3,1.6],[20.9,22.4,2.35],[20.9,22.65,2.2]]},{"id":"W032","color":"black","type":"wire","pts":[[20.7,22.65,2.2],[20.7,22.4,2.35],[20.7,22.3,1.703],[20.7,21.989,1.303],[9.462,21.989,1.303],[9.462,22.3,1.703],[9.462,23.425,1.93],[9.462,23.675,1.78]]},{"id":"W033","color":"red","type":"wire","pts":[[20.9,22.65,2.2],[20.9,22.4,2.35],[20.9,22.3,1.674],[20.9,21.633,1.274],[5.818,21.8,0.6],[5.818,21.8,-0.3],[5.818,22.0,-0.7],[5.818,22.651,-0.8],[4.568,22.651,-0.8],[4.568,9.1,-0.8],[4.377,9.1,-0.8],[4.35,1.65,-1.75],[4.35,0.95,-1.75],[4.35,0.95,-1.45]]},{"id":"W034","color":"white","type":"wire","pts":[[13.099,2.175,2.3],[13.099,1.925,2.45],[13.099,1.6,0.849],[13.099,0.947,0.449],[12.271,1.1,0.5],[12.271,1.1,-0.3],[12.071,1.1,-0.75],[11.571,1.1,-0.8],[11.571,9.1,-0.8],[4.391,9.1,-0.8],[4.539,16.08,-0.8],[5.955,16.08,-0.8],[5.955,15.1,-0.7],[5.955,14.9,-0.3],[5.955,14.9,0.6],[7.8,14.747,0.898],[7.8,14.4,1.6],[7.8,13.89,2.53],[7.8,13.64,2.38]]},{"id":"W035","color":"blue","type":"wire","pts":[[13.349,2.175,2.3],[13.349,1.925,2.45],[13.349,1.6,0.892],[13.349,1.142,0.492],[12.414,1.1,0.5],[12.414,1.1,-0.3],[12.214,1.1,-0.75],[11.687,1.1,-0.8],[11.687,9.1,-0.8],[4.41,9.1,-0.8],[4.488,16.082,-0.8],[6.037,16.082,-0.8],[6.037,15.1,-0.7],[6.037,14.9,-0.3],[6.037,14.9,0.6],[8.0,14.942,0.984],[8.0,14.4,1.6],[8.0,13.89,2.53],[8.0,13.64,2.38]]},{"id":"W036","color":"white","type":"wire","pts":[[4.55,6.65,-1.45],[4.55,6.65,-1.75],[4.55,7.35,-1.75],[4.573,9.1,-0.8],[4.558,9.1,-0.8],[4.558,15.989,-0.8],[5.585,15.989,-0.8],[5.585,15.1,-0.7],[5.585,14.9,-0.3],[5.585,14.9,0.6],[7.6,14.652,0.745],[7.6,14.4,1.6],[7.6,13.89,2.53],[7.6,13.64,2.38]]},{"id":"W037","color":"blue","type":"wire","pts":[[4.75,6.65,-1.45],[4.75,6.65,-1.75],[4.75,7.35,-1.75],[4.742,9.1,-0.8],[4.454,9.1,-0.8],[4.454,15.781,-0.8],[6.036,15.781,-0.8],[6.036,15.1,-0.7],[6.036,14.9,-0.3],[6.036,14.9,0.6],[8.0,15.039,1.176],[8.0,14.4,1.6],[8.0,13.89,2.53],[8.0,13.64,2.38]]},{"id":"W038","color":"white","type":"wire","pts":[[4.95,6.35,-1.45],[4.95,6.35,-1.75],[4.95,7.05,-1.75],[4.934,9.1,-0.8],[4.426,9.1,-0.8],[4.426,15.75,-0.8],[5.688,15.75,-0.8],[5.688,15.1,-0.7],[5.688,14.9,-0.3],[5.688,14.9,0.6],[14.68,14.652,0.967],[14.68,14.4,1.6],[14.68,13.89,2.15],[14.68,13.64,2.0]]},{"id":"W039","color":"blue","type":"wire","pts":[[4.35,6.65,-1.45],[4.35,6.65,-1.75],[4.35,7.35,-1.75],[4.369,9.1,-0.8],[4.542,9.1,-0.8],[4.542,15.984,-0.8],[5.575,15.984,-0.8],[5.575,15.1,-0.7],[5.575,14.9,-0.3],[5.575,14.9,0.6],[14.88,15.104,0.591],[14.88,14.4,1.6],[14.88,13.89,2.15],[14.88,13.64,2.0]]},{"id":"W040","color":"red","type":"wire","pts":[[7.998,23.675,1.78],[7.998,23.425,1.93],[7.998,22.3,1.6],[7.998,21.854,1.027],[5.685,21.8,0.6],[5.685,21.8,-0.3],[5.685,22.0,-0.7],[5.685,22.613,-0.8],[4.513,22.613,-0.8],[4.505,9.1,-0.8],[11.341,9.1,-0.8],[11.341,1.1,-0.8],[12.242,1.1,-0.75],[12.442,1.1,-0.3],[12.442,1.1,0.5],[13.718,1.154,0.514],[13.718,1.6,0.914],[13.718,1.925,2.45],[13.718,2.175,2.3]]},{"id":"W041","color":"red","type":"wire","pts":[[13.968,2.175,2.3],[13.968,1.925,2.45],[13.968,1.6,1.09],[13.968,1.203,0.69],[12.335,1.1,0.5],[12.335,1.1,-0.3],[12.135,1.1,-0.75],[11.53,1.1,-0.8],[11.53,9.1,-0.8],[4.391,9.1,-0.8],[4.391,9.1,-0.8],[2.573,9.1,-0.8],[2.6,3.45,-1.75],[2.6,2.75,-1.75],[2.6,2.75,-1.45]]},{"id":"W042","color":"red","type":"wire","pts":[[8.242,23.675,1.78],[8.242,23.425,1.93],[8.242,22.3,1.6],[8.242,21.759,0.831],[5.896,21.8,0.6],[5.896,21.8,-0.3],[5.896,22.0,-0.7],[5.896,22.835,-0.8],[4.47,22.835,-0.8],[4.47,9.1,-0.8],[2.597,9.1,-0.8],[2.6,1.65,-1.75],[2.6,0.95,-1.75],[2.6,0.95,-1.45]]},{"id":"W043","color":"white","type":"wire","pts":[[13.73,9.36,2.0],[13.73,9.11,2.15],[13.73,8.6,1.6],[13.73,8.3,0.63],[5.689,8.1,0.6],[5.689,8.1,-0.3],[5.689,8.3,-0.7],[5.689,9.045,-0.8],[4.425,9.045,-0.8],[4.425,9.1,-0.8],[4.334,9.1,-0.8],[4.35,3.45,-1.75],[4.35,2.75,-1.75],[4.35,2.75,-1.45]]},{"id":"W044","color":"black","type":"wire","pts":[[9.706,23.675,1.78],[9.706,23.425,1.93],[9.706,22.3,1.6],[9.706,21.78,0.642],[5.735,21.8,0.6],[5.735,21.8,-0.3],[5.735,22.0,-0.7],[5.735,22.768,-0.8],[4.534,22.768,-0.8],[4.534,9.1,-0.8],[2.816,9.1,-0.8],[2.8,1.65,-1.75],[2.8,0.95,-1.75],[2.8,0.95,-1.45]]},{"id":"W045","color":"black","type":"jumper","pts":[[2.8,0.95,-1.45],[3.675,0.95,-1.7],[4.55,0.95,-1.45]]},{"id":"W046","color":"black","type":"jumper","pts":[[4.55,0.95,-1.45],[3.675,1.85,-1.7],[2.8,2.75,-1.45]]},{"id":"W047","color":"black","type":"jumper","pts":[[2.8,2.75,-1.45],[3.675,2.75,-1.7],[4.55,2.75,-1.45]]},{"id":"W048","color":"white","type":"wire","pts":[[5.7,13.64,2.38],[5.7,13.89,2.53],[5.7,14.4,1.6],[5.7,14.794,0.725],[5.833,14.9,0.6],[5.833,14.9,-0.3],[5.833,15.1,-0.7],[5.833,16.024,-0.8],[4.572,16.024,-0.8],[4.572,11.85,-0.8],[2.175,11.85,-1.2],[2.175,11.85,-1.0]]},{"id":"W049","color":"blue","type":"wire","pts":[[7.2,13.64,2.38],[7.2,13.89,2.53],[7.2,14.4,1.6],[7.2,14.843,1.078],[5.818,14.9,0.6],[5.818,14.9,-0.3],[5.818,15.1,-0.7],[5.818,15.78,-0.8],[4.451,15.78,-0.8],[4.451,11.85,-0.8],[2.375,11.85,-1.2],[2.375,11.85,-1.0]]},{"id":"W050","color":"white","type":"wire","pts":[[5.9,13.64,2.38],[5.9,13.89,2.53],[5.9,14.4,1.6],[5.9,14.798,0.864],[5.863,14.9,0.6],[5.863,14.9,-0.3],[5.863,15.1,-0.7],[5.863,16.013,-0.8],[4.516,16.013,-0.8],[4.516,9.1,-0.8],[2.611,9.1,-0.8],[2.6,7.05,-1.75],[2.6,6.35,-1.75],[2.6,6.35,-1.45]]},{"id":"W051","color":"blue","type":"wire","pts":[[7.2,13.64,2.38],[7.2,13.89,2.53],[7.2,14.4,1.6],[7.2,15.037,0.662],[5.654,14.9,0.6],[5.654,14.9,-0.3],[5.654,15.1,-0.7],[5.654,15.924,-0.8],[4.471,15.924,-0.8],[4.471,9.1,-0.8],[2.797,9.1,-0.8],[2.8,7.05,-1.75],[2.8,6.35,-1.75],[2.8,6.35,-1.45]]},{"id":"W052","color":"white","type":"wire","pts":[[6.3,13.64,2.38],[6.3,13.89,2.53],[6.3,14.4,1.6],[6.3,15.021,0.83],[5.78,14.9,0.6],[5.78,14.9,-0.3],[5.78,15.1,-0.7],[5.78,16.089,-0.8],[4.507,16.089,-0.8],[4.507,9.1,-0.8],[2.608,9.1,-0.8],[2.6,5.25,-1.75],[2.6,4.55,-1.75],[2.6,4.55,-1.45]]},{"id":"W053","color":"blue","type":"wire","pts":[[7.2,13.64,2.38],[7.2,13.89,2.53],[7.2,14.4,1.6],[7.2,15.068,1.182],[5.763,14.9,0.6],[5.763,14.9,-0.3],[5.763,15.1,-0.7],[5.763,15.846,-0.8],[4.386,15.846,-0.8],[4.386,9.1,-0.8],[2.772,9.1,-0.8],[2.8,5.25,-1.75],[2.8,4.55,-1.75],[2.8,4.55,-1.45]]},{"id":"W054","color":"white","type":"wire","pts":[[6.5,13.64,2.38],[6.5,13.89,2.53],[6.5,14.4,1.6],[6.5,14.835,1.163],[5.801,14.9,0.6],[5.801,14.9,-0.3],[5.801,15.1,-0.7],[5.801,15.858,-0.8],[4.489,15.858,-0.8],[4.489,9.1,-0.8],[4.353,9.1,-0.8],[4.35,5.25,-1.75],[4.35,4.55,-1.75],[4.35,4.55,-1.45]]},{"id":"W055","color":"blue","type":"wire","pts":[[7.2,13.64,2.38],[7.2,13.89,2.53],[7.2,14.4,1.821],[7.2,14.819,1.421],[5.848,14.9,0.6],[5.848,14.9,-0.3],[5.848,15.1,-0.7],[5.848,15.973,-0.8],[4.547,15.973,-0.8],[4.547,9.1,-0.8],[4.57,9.1,-0.8],[4.55,5.25,-1.75],[4.55,4.55,-1.75],[4.55,4.55,-1.45]]},{"id":"W056","color":"white","type":"wire","pts":[[16.65,18.6,2.2],[16.65,18.85,2.35],[16.65,21.3,1.737],[16.65,21.843,1.337],[5.834,21.8,0.6],[5.834,21.8,-0.3],[5.834,22.0,-0.7],[5.834,22.741,-0.8],[4.527,22.741,-0.8],[4.48,15.76,-0.8],[5.694,15.76,-0.8],[5.694,15.1,-0.7],[5.694,14.9,-0.3],[5.694,14.9,0.6],[6.1,14.943,1.337],[6.1,14.4,1.737],[6.1,13.89,2.53],[6.1,13.64,2.38]]},{"id":"W057","color":"white","type":"wire","pts":[[9.0,9.36,2.38],[9.0,9.11,2.53],[9.0,8.6,1.65],[9.0,7.934,1.25],[17.105,7.934,1.25],[17.105,7.6,1.65],[17.105,5.64,2.55],[17.105,5.39,2.4]]},{"id":"W058","color":"white","type":"wire","pts":[[17.255,5.39,2.4],[17.255,5.64,2.55],[17.255,7.6,1.6],[17.255,7.897,0.67],[5.975,8.1,0.6],[5.975,8.1,-0.3],[5.975,8.3,-0.7],[5.975,9.094,-0.8],[4.561,9.094,-0.8],[4.384,22.855,-0.8],[5.647,22.855,-0.8],[5.647,22.0,-0.7],[5.647,21.8,-0.3],[5.647,21.8,0.6],[16.65,21.598,0.67],[16.65,21.3,1.6],[16.65,18.67,2.35],[16.65,18.42,2.2]]},{"id":"W059","color":"red","type":"wire","pts":[[8.242,23.675,1.78],[8.242,23.425,1.93],[8.242,22.3,1.767],[8.242,21.837,1.367],[5.766,21.8,0.6],[5.766,21.8,-0.3],[5.766,22.0,-0.7],[5.766,22.705,-0.8],[4.516,22.705,-0.8],[4.408,9.282,-0.8],[6.001,9.282,-0.8],[6.001,8.3,-0.7],[6.001,8.1,-0.3],[6.001,8.1,0.6],[17.405,8.137,1.367],[17.405,7.6,1.767],[17.405,5.64,2.55],[17.405,5.39,2.4]]},{"id":"W060","color":"black","type":"wire","pts":[[9.706,23.675,1.78],[9.706,23.425,1.93],[9.706,22.3,1.6],[9.706,21.689,0.69],[5.89,21.8,0.6],[5.89,21.8,-0.3],[5.89,22.0,-0.7],[5.89,22.824,-0.8],[4.559,22.824,-0.8],[4.462,9.224,-0.8],[6.04,9.224,-0.8],[6.04,8.3,-0.7],[6.04,8.1,-0.3],[6.04,8.1,0.6],[17.555,7.989,0.69],[17.555,7.6,1.6],[17.555,5.64,2.55],[17.555,5.39,2.4]]},{"id":"W061","color":"red","type":"wire","pts":[[8.242,23.675,1.78],[8.242,23.425,1.93],[8.242,22.3,1.732],[8.242,21.706,1.332],[16.65,21.706,1.332],[16.65,21.3,1.732],[16.65,18.49,2.35],[16.65,18.24,2.2]]},{"id":"W062","color":"black","type":"wire","pts":[[9.706,23.675,1.78],[9.706,23.425,1.93],[9.706,22.3,1.6],[9.706,21.708,1.189],[16.65,21.708,1.189],[16.65,21.3,1.6],[16.65,18.31,2.35],[16.65,18.06,2.2]]},{"id":"W063","color":"white","type":"wire","pts":[[14.38,9.36,2.0],[14.38,9.11,2.15],[14.38,8.6,1.676],[14.38,8.216,1.276],[5.748,8.1,0.6],[5.748,8.1,-0.3],[5.748,8.3,-0.7],[5.748,9.074,-0.8],[4.488,9.074,-0.8],[4.488,9.1,-0.8],[6.447,9.1,-0.8],[6.447,1.695,-1.2],[6.447,1.695,-3.5],[8.558,1.695,-3.5],[8.558,1.695,-3.2]]},{"id":"W064","color":"white","type":"wire","pts":[[14.68,9.36,2.0],[14.68,9.11,2.15],[14.68,8.6,1.6],[14.68,8.319,0.615],[5.584,8.1,0.6],[5.584,8.1,-0.3],[5.584,8.3,-0.7],[5.584,9.164,-0.8],[4.435,9.164,-0.8],[4.435,9.1,-0.8],[6.447,9.1,-0.8],[6.447,3.895,-1.2],[6.447,3.895,-3.5],[8.558,3.895,-3.5],[8.558,3.895,-3.2]]},{"id":"W065","color":"white","type":"wire","pts":[[14.98,9.36,2.0],[14.98,9.11,2.15],[14.98,8.6,1.6],[14.98,8.079,0.817],[5.793,8.1,0.6],[5.793,8.1,-0.3],[5.793,8.3,-0.7],[5.793,9.253,-0.8],[4.48,9.253,-0.8],[4.48,9.1,-0.8],[6.447,9.1,-0.8],[6.447,6.095,-1.2],[6.447,6.095,-3.5],[8.558,6.095,-3.5],[8.558,6.095,-3.2]]},{"id":"W066","color":"blue","type":"wire","pts":[[15.58,9.36,2.0],[15.58,9.11,2.15],[15.58,8.6,1.722],[15.58,8.222,1.322],[5.797,8.1,0.6],[5.797,8.1,-0.3],[5.797,8.3,-0.7],[5.797,8.984,-0.8],[4.391,8.984,-0.8],[4.391,9.1,-0.8],[6.447,9.1,-0.8],[6.447,1.695,-1.2],[6.447,1.695,-3.5],[8.858,1.695,-3.5],[8.858,1.695,-3.2]]},{"id":"W067","color":"blue","type":"jumper","pts":[[8.858,1.695,-3.2],[8.858,2.795,-3.45],[8.858,3.895,-3.2]]},{"id":"W068","color":"blue","type":"jumper","pts":[[8.858,3.895,-3.2],[8.858,4.995,-3.45],[8.858,6.095,-3.2]]},{"id":"W069","color":"red","type":"wire","pts":[[8.242,23.675,1.78],[8.242,23.425,1.93],[8.242,22.3,1.6],[8.242,21.806,0.627],[5.731,21.8,0.6],[5.731,21.8,-0.3],[5.731,22.0,-0.7],[5.731,22.826,-0.8],[4.457,22.826,-0.8],[4.457,9.1,-0.8],[6.447,9.1,-0.8],[6.447,1.695,-1.2],[6.447,1.695,-3.5],[7.958,1.695,-3.5],[7.958,1.695,-3.2]]},{"id":"W070","color":"black","type":"wire","pts":[[9.706,23.675,1.78],[9.706,23.425,1.93],[9.706,22.3,1.673],[9.706,21.611,1.273],[5.926,21.8,0.6],[5.926,21.8,-0.3],[5.926,22.0,-0.7],[5.926,22.786,-0.8],[4.5,22.786,-0.8],[4.5,9.1,-0.8],[6.447,9.1,-0.8],[6.447,1.695,-1.2],[6.447,1.695,-3.5],[8.258,1.695,-3.5],[8.258,1.695,-3.2]]},{"id":"W071","color":"red","type":"jumper","pts":[[7.958,1.695,-3.2],[7.958,2.795,-3.45],[7.958,3.895,-3.2]]},{"id":"W072","color":"black","type":"jumper","pts":[[8.258,1.695,-3.2],[8.258,2.795,-3.45],[8.258,3.895,-3.2]]},{"id":"W073","color":"red","type":"jumper","pts":[[7.958,3.895,-3.2],[7.958,4.995,-3.45],[7.958,6.095,-3.2]]},{"id":"W074","color":"black","type":"jumper","pts":[[8.258,3.895,-3.2],[8.258,4.995,-3.45],[8.258,6.095,-3.2]]},{"id":"W075","color":"SA","type":"bundle4","pts":[[11.4,13.64,2.38],[11.4,13.89,2.53],[11.4,14.4,1.6],[11.4,14.88,1.059],[17.18,14.88,1.059],[17.18,14.4,1.6],[17.18,13.89,2.15],[17.18,13.64,2.0]]},{"id":"W076","color":"SA","type":"bundle4","pts":[[7.6,20.49,2.82],[7.6,20.74,2.97],[7.6,21.3,1.775],[7.6,21.553,1.375],[5.647,21.8,0.6],[5.647,21.8,-0.3],[5.647,22.0,-0.7],[5.647,22.814,-0.8],[4.417,22.814,-0.8],[4.417,18.11,-0.8],[2.28,18.11,-1.2],[2.28,18.11,-0.45]]},{"id":"W077","color":"FC","type":"bundle4","pts":[[11.902,23.675,1.78],[11.902,23.475,1.78],[11.902,22.3,1.55],[11.902,21.4,1.55],[10.95,21.4,1.55],[10.95,21.8,0.4],[10.95,21.8,-0.3],[10.95,23.12,-0.7],[10.95,23.12,-1.15],[4.86,23.12,-1.15],[4.86,16.22,-1.15],[10.95,16.22,-1.15],[10.95,16.22,-0.7],[10.95,14.9,-0.3],[10.95,14.9,0.4],[10.95,14.5,1.55],[10.12,14.5,1.55],[10.12,14.4,1.55],[10.12,13.84,2.38],[10.12,13.64,2.38]],"fc":{"jacket":[[11.902,21.997,1.55],[11.902,21.4,1.55],[10.95,21.4,1.55],[10.95,21.8,0.4],[10.95,21.8,-0.3],[10.95,23.12,-0.7],[10.95,23.12,-1.15],[4.86,23.12,-1.15],[4.86,16.22,-1.15],[10.95,16.22,-1.15],[10.95,16.22,-0.7],[10.95,14.9,-0.3],[10.95,14.9,0.4],[10.95,14.5,1.55],[10.519,14.5,1.55]],"twist":[[[11.902,22.984,1.684],[11.902,22.3,1.55],[11.902,21.997,1.55]],[[10.519,14.5,1.55],[10.12,14.5,1.55],[10.12,14.4,1.55],[10.12,14.12,1.966]]],"fans":[{"color":"white","pts":[[11.902,22.984,1.684],[11.902,23.155,1.832],[11.902,23.325,1.86],[11.902,23.675,1.78]]},{"color":"black","pts":[[11.902,22.984,1.684],[12.024,23.155,1.832],[12.146,23.325,1.86],[12.146,23.675,1.78]]},{"color":"blue","pts":[[11.902,22.984,1.684],[12.146,23.155,1.832],[12.39,23.325,1.86],[12.39,23.675,1.78]]},{"color":"drain","pts":[[11.902,22.984,1.684],[12.268,23.155,1.832],[12.634,23.325,1.86],[12.634,23.675,1.78]]},{"color":"white","pts":[[10.12,14.12,1.966],[10.268,14.055,2.273],[10.416,13.99,2.46],[10.416,13.64,2.38]]},{"color":"black","pts":[[10.12,14.12,1.966],[10.169,14.055,2.273],[10.219,13.99,2.46],[10.219,13.64,2.38]]},{"color":"blue","pts":[[10.12,14.12,1.966],[10.071,14.055,2.273],[10.022,13.99,2.46],[10.022,13.64,2.38]]},{"color":"drain","pts":[[10.12,14.12,1.966],[9.972,14.055,2.273],[9.825,13.99,2.46],[9.825,13.64,2.38]]}]}},{"id":"W078","color":"FC","type":"bundle4","pts":[[10.12,13.64,2.38],[10.12,13.84,2.38],[10.12,14.4,1.55],[10.12,14.56,1.55],[10.65,14.56,1.55],[10.65,14.9,0.4],[10.65,14.9,-0.3],[10.65,16.22,-0.7],[10.65,16.22,-1.15],[4.76,16.22,-1.15],[4.76,23.12,-1.15],[10.65,23.12,-1.15],[10.65,23.12,-0.7],[10.65,21.8,-0.3],[10.65,21.8,0.4],[10.65,21.46,1.55],[7.1,21.46,1.55],[7.1,21.3,1.55],[7.1,20.69,2.82],[7.1,20.49,2.82]],"fc":{"jacket":[[10.459,14.56,1.55],[10.65,14.56,1.55],[10.65,14.9,0.4],[10.65,14.9,-0.3],[10.65,16.22,-0.7],[10.65,16.22,-1.15],[4.76,16.22,-1.15],[4.76,23.12,-1.15],[10.65,23.12,-1.15],[10.65,23.12,-0.7],[10.65,21.8,-0.3],[10.65,21.8,0.4],[10.65,21.46,1.55],[7.1,21.46,1.55],[7.1,21.391,1.55]],"twist":[[[10.12,14.12,1.966],[10.12,14.4,1.55],[10.12,14.56,1.55],[10.459,14.56,1.55]],[[7.1,21.391,1.55],[7.1,21.3,1.55],[7.1,20.906,2.369]]],"fans":[{"color":"white","pts":[[10.12,14.12,1.966],[10.268,14.055,2.273],[10.416,13.99,2.46],[10.416,13.64,2.38]]},{"color":"black","pts":[[10.12,14.12,1.966],[10.169,14.055,2.273],[10.219,13.99,2.46],[10.219,13.64,2.38]]},{"color":"blue","pts":[[10.12,14.12,1.966],[10.071,14.055,2.273],[10.022,13.99,2.46],[10.022,13.64,2.38]]},{"color":"drain","pts":[[10.12,14.12,1.966],[9.972,14.055,2.273],[9.825,13.99,2.46],[9.825,13.64,2.38]]},{"color":"white","pts":[[7.1,20.906,2.369],[7.248,20.873,2.695],[7.395,20.84,2.9],[7.395,20.49,2.82]]},{"color":"black","pts":[[7.1,20.906,2.369],[7.149,20.873,2.695],[7.198,20.84,2.9],[7.198,20.49,2.82]]},{"color":"blue","pts":[[7.1,20.906,2.369],[7.051,20.873,2.695],[7.002,20.84,2.9],[7.002,20.49,2.82]]},{"color":"drain","pts":[[7.1,20.906,2.369],[6.952,20.873,2.695],[6.804,20.84,2.9],[6.804,20.49,2.82]]}]}},{"id":"W079","color":"FC","type":"bundle4","pts":[[7.1,20.49,2.82],[7.1,20.69,2.82],[7.1,21.3,1.55],[7.1,21.52,1.55],[12.878,21.52,1.55],[12.878,22.3,1.55],[12.878,23.475,1.78],[12.878,23.675,1.78]],"fc":{"jacket":[[7.1,21.391,1.55],[7.1,21.52,1.55],[12.878,21.52,1.55],[12.878,21.997,1.55]],"twist":[[[7.1,20.906,2.369],[7.1,21.3,1.55],[7.1,21.391,1.55]],[[12.878,21.997,1.55],[12.878,22.3,1.55],[12.878,22.984,1.684]]],"fans":[{"color":"white","pts":[[7.1,20.906,2.369],[7.248,20.873,2.695],[7.395,20.84,2.9],[7.395,20.49,2.82]]},{"color":"black","pts":[[7.1,20.906,2.369],[7.149,20.873,2.695],[7.198,20.84,2.9],[7.198,20.49,2.82]]},{"color":"blue","pts":[[7.1,20.906,2.369],[7.051,20.873,2.695],[7.002,20.84,2.9],[7.002,20.49,2.82]]},{"color":"drain","pts":[[7.1,20.906,2.369],[6.952,20.873,2.695],[6.804,20.84,2.9],[6.804,20.49,2.82]]},{"color":"white","pts":[[12.878,22.984,1.684],[12.878,23.155,1.832],[12.878,23.325,1.86],[12.878,23.675,1.78]]},{"color":"black","pts":[[12.878,22.984,1.684],[13.0,23.155,1.832],[13.122,23.325,1.86],[13.122,23.675,1.78]]},{"color":"blue","pts":[[12.878,22.984,1.684],[13.122,23.155,1.832],[13.366,23.325,1.86],[13.366,23.675,1.78]]},{"color":"drain","pts":[[12.878,22.984,1.684],[13.244,23.155,1.832],[13.61,23.325,1.86],[13.61,23.675,1.78]]}]}},{"id":"W080","color":"green","type":"wire","pts":[[10.194,23.675,1.78],[10.194,23.425,1.93],[10.194,22.3,1.6],[10.194,21.704,1.175],[5.899,21.8,0.6],[5.899,21.8,-0.3],[5.899,22.0,-0.7],[5.899,22.65,-0.8],[4.485,22.65,-0.8],[4.485,9.1,-0.8],[4.1,9.1,-0.8]]}],"loop":{"panel":[4.0,9.1,-0.8],"n":3},"bp_wires":[{"color":"red","pts":[[16.7,3.215,1.2],[14.568,2.615,2.28],[12.436,4.6,1.78]]},{"color":"black","pts":[[16.7,2.965,1.2],[14.324,2.365,2.28],[11.948,4.6,1.78]]},{"color":"green","pts":[[16.9,3.515,0.15],[13.448,2.915,2.28],[9.996,4.6,1.78]]},{"color":"green","pts":[[9.996,4.6,1.78],[12.948,3.315,2.28],[15.9,3.915,0.15]]},{"color":"red","pts":[[12.68,4.6,1.78],[12.68,5.5,1.98],[12.68,8.044,0.888],[2.3,8.044,0.888],[2.0,8.1,1.0]]},{"color":"black","pts":[[12.192,4.6,1.78],[12.192,5.5,1.98],[12.192,8.084,0.969],[2.3,8.084,0.969],[2.0,8.1,1.0]]},{"color":"green","pts":[[10.24,4.6,1.78],[10.24,5.5,1.98],[10.24,8.161,1.122],[2.3,8.161,1.122],[2.0,8.1,1.0]]}],"items":[{"item":1,"tag":"ENC-1","qty":1,"pn":"CSD302412","desc":"CONCEPT single-door wall-mount enclosure 30x..","anchors":["ENC"]},{"item":2,"tag":"BP-1","qty":1,"pn":"CP3024","desc":"CONCEPT backpan (sub-panel) for 30x24","anchors":["BP"]},{"item":3,"tag":"BPN-1","qty":4,"pn":"-","desc":"Backpan mounting nuts/washers (verify whethe..","anchors":["BP"]},{"item":4,"tag":"SP-1","qty":1,"pn":"CSPB3024","desc":"CONCEPT B-style swing-out panel for 30x24","anchors":["SP"]},{"item":5,"tag":"SP-2","qty":1,"pn":"CSPBADB","desc":"CONCEPT adapter bracket for B-style swing pa..","anchors":["RAILS"]},{"item":6,"tag":"SP-3","qty":1,"pn":"CAM124","desc":"CONCEPT adjustable-depth mounting kit, 4 sli..","anchors":["RAILS"]},{"item":7,"tag":"STR-1","qty":1,"pn":"P1000-10PG","desc":"Steel strut channel 1-5/8 x 1-5/8 in, 12 ga,..","anchors":["STAND"]},{"item":8,"tag":"SN-1","qty":4,"pn":"P1008-EG","desc":"Channel spring nut 3/8-16 for 1-5/8 in strut","anchors":[]},{"item":9,"tag":"BLT-1","qty":4,"pn":"-","desc":"Hex bolt 3/8-16 x 1-1/4 in with flat washer,..","anchors":[]},{"item":10,"tag":"SW-1","qty":4,"pn":"P/N to confirm","desc":"Sealing washer for 3/8 in mounting bolt","anchors":[]},{"item":11,"tag":"GND-1","qty":1,"pn":"-","desc":"Bonding jumper, swing panel to enclosure","anchors":[]},{"item":12,"tag":"TR-1","qty":1,"pn":"TR100VA001","desc":"Transformer 120 to 24 VAC, 96 VA Class 2, bu..","anchors":[]},{"item":13,"tag":"LV-1","qty":8,"pn":"55808699","desc":"Power cord SJOOW 14/3, 300 V, per foot (defa..","anchors":[]},{"item":14,"tag":"PLG-1","qty":1,"pn":"-","desc":"Plug, 15 A 125 V NEMA 5-15P, industrial grad..","anchors":[]},{"item":15,"tag":"CG-1","qty":1,"pn":"-","desc":"Liquid-tight cord grip, 1/2 in NPT, for 0.30..","anchors":[]},{"item":16,"tag":"B-HUB","qty":1,"pn":"-","desc":"OPTION B: conduit hub / connector 1/2 in, in..","anchors":[]},{"item":17,"tag":"B-FMC","qty":1,"pn":"-","desc":"OPTION B: flex whip 1/2 in FMC, ~3 ft, with ..","anchors":[]},{"item":18,"tag":"B-DISC","qty":1,"pn":"-","desc":"OPTION B: local disconnect / switch as requi..","anchors":[]},{"item":19,"tag":"A-ALT","qty":1,"pn":"PSH100AB10-EXT2","desc":"OPTION A alternative: factory-corded 100 VA ..","anchors":[]},{"item":20,"tag":"PNL-SW","qty":1,"pn":"FAZ-C4/2-NA","desc":"PANEL POWER switch: 2-pole 4 A supplementary..","anchors":[]},{"item":21,"tag":"TP-FCU-1","qty":1,"pn":"M4-CGM09090-0","desc":"General purpose controller, BACnet MS/TP, 18..","anchors":["TP-FCU-1"]},{"item":22,"tag":"TP-VAV-1","qty":1,"pn":"M4-CVM03050-0","desc":"VAV box controller, integral actuator + DP s..","anchors":["TP-VAV-1"]},{"item":23,"tag":"TP-XPM-1","qty":1,"pn":"M4-XPM04060-0","desc":"I/O expansion module on SA bus","anchors":["TP-XPM-1"]},{"item":24,"tag":"CVT-1","qty":1,"pn":"TL-CWCVT-0","desc":"Wireless MS/TP commissioning converter (lapt..","anchors":[]},{"item":25,"tag":"TP-NS-1","qty":1,"pn":"NSB8BTN240-0","desc":"Network sensor NS8000, white, temp + setpoin..","anchors":["TP-NS-1"]},{"item":26,"tag":"TS-1","qty":1,"pn":"BA/10K-2-SP","desc":"Wall temp sensor 10K-2, plain single-gang pl..","anchors":["TS-1"]},{"item":27,"tag":"ACT-1","qty":1,"pn":"LMB24-SR-T","desc":"Damper actuator 45 in-lb, 24 V AC/DC, 2-10 V..","anchors":["ACT-1"]},{"item":28,"tag":"FAN-1","qty":1,"pn":"FP-108-1-24VAC-ST","desc":"Axial fan 24 VAC, 0.3 A (7.2 VA), 120 CFM, s..","anchors":["FAN-1"]},{"item":29,"tag":"FG-1","qty":2,"pn":"B-4","desc":"Fan finger guard, wire, for 4.7 in (120 mm) ..","anchors":["FAN-1"]},{"item":30,"tag":"FAN-SO","qty":4,"pn":"-","desc":"Standoff 1 in, #8-32 F-F hex, aluminum, with..","anchors":[]},{"item":31,"tag":"M1-M3","qty":3,"pn":"DPM2-AT-HL","desc":"1/8 DIN panel meter, +/-10 V input (0-10 V u..","anchors":["M1","M2","M3"]},{"item":32,"tag":"CR-1..4","qty":4,"pn":"RXM2AB2B7","desc":"Plug-in relay 2 C/O 12 A, 24 VAC coil 1.2 VA..","anchors":["CR-1","CR-2","CR-3","CR-4"]},{"item":33,"tag":"CR-SKT","qty":4,"pn":"RXZE2S108M","desc":"Relay socket, separate contacts, screw, DIN","anchors":["CR-1"]},{"item":34,"tag":"CR-CLP","qty":4,"pn":"RXM040W","desc":"Relay retaining clip","anchors":[]},{"item":35,"tag":"PL-FAN","qty":1,"pn":"XB5AVB3","desc":"22 mm LED pilot light 24 V AC/DC, green (FAN..","anchors":["PL-FAN"]},{"item":36,"tag":"PL-ALM","qty":1,"pn":"XB5AVB4","desc":"22 mm LED pilot light 24 V AC/DC, red (alarm)","anchors":["PL-ALM"]},{"item":37,"tag":"PL-HOA","qty":1,"pn":"XB5AVB5","desc":"22 mm LED pilot light 24 V AC/DC, yellow (NO..","anchors":["PL-HOA"]},{"item":38,"tag":"PL-PWR","qty":1,"pn":"XB5AVB1","desc":"22 mm LED pilot light 24 V AC/DC, white (24 ..","anchors":["PL-PWR"]},{"item":39,"tag":"PB-START","qty":1,"pn":"XB5AA31","desc":"22 mm flush pushbutton, green, momentary, 1 NO","anchors":["PB-START"]},{"item":40,"tag":"PB-STOP","qty":1,"pn":"XB5AA42","desc":"22 mm flush pushbutton, red, momentary, 1 NC","anchors":["PB-STOP"]},{"item":41,"tag":"SS-HOA","qty":1,"pn":"XB5AD33","desc":"22 mm selector, 3 position stay-put (H-O-A),..","anchors":["SS-HOA"]},{"item":42,"tag":"SS-AUX","qty":2,"pn":"ZBE101","desc":"Add-on contact block 1 NO for 22 mm operator..","anchors":[]},{"item":43,"tag":"LEG-1","qty":11,"pn":"-","desc":"Engraved legend plate (allowance)","anchors":["LEG"]},{"item":44,"tag":"POT-1","qty":1,"pn":"3590S-2-503L","desc":"10-turn precision pot 50 k","anchors":["POT-1"]},{"item":45,"tag":"DIAL-1","qty":1,"pn":"H-22-6A","desc":"Turns-counting dial 22.2 mm","anchors":["POT-1"]},{"item":46,"tag":"RES-1","qty":1,"pn":"-","desc":"Resistor 1 k, 1/4 W metal film 1%","anchors":[]},{"item":47,"tag":"AO-1","qty":1,"pn":"19.50.0.024.0000","desc":"0-10 VDC manual signal source, Auto/Hand + p..","anchors":["AO-1"]},{"item":48,"tag":"TB-GY","qty":11,"pn":"3044102","desc":"Feed-through terminal block UT 4, gray","anchors":["TB1-G1"]},{"item":49,"tag":"TB-RD","qty":8,"pn":"3045127","desc":"Feed-through terminal block UT 4, red (24 VA..","anchors":["TB1-R1"]},{"item":50,"tag":"TB-BK","qty":8,"pn":"3045143","desc":"Feed-through terminal block UT 4, black (24 ..","anchors":["TB1-K1"]},{"item":51,"tag":"TB-PE","qty":5,"pn":"3044128","desc":"Ground terminal block UT 4-PE, green-yellow","anchors":["TB1-PE1"]},{"item":52,"tag":"FC-BU","qty":4,"pn":"UT 4 BU (3044115)","desc":"Feed-through terminal block UT 4, blue (FC B..","anchors":["TB1-FCA+"]},{"item":53,"tag":"FC-WH","qty":4,"pn":"UT 4 WH (3045130)","desc":"Feed-through terminal block UT 4, white (FC ..","anchors":["TB1-FCA-"]},{"item":54,"tag":"TB-FU","qty":2,"pn":"3074169","desc":"Fuse terminal block UT 4-HESI (5x20)","anchors":["TB1-F1"]},{"item":55,"tag":"FU-2A","qty":2,"pn":"GMA-2-R","desc":"Fuse 5 x 20 mm fast-acting 2 A","anchors":[]},{"item":56,"tag":"FU-3A","qty":2,"pn":"GMA-3-R","desc":"Fuse 5 x 20 mm fast-acting 3 A","anchors":[]},{"item":57,"tag":"EC-1","qty":6,"pn":"E/UK (1201442)","desc":"End clamp (end bracket), screw","anchors":["TB1-EC1"]},{"item":58,"tag":"EC-2","qty":1,"pn":"D-UT 2,5/10 (3047028)","desc":"End cover for UT 2,5 / UT 4","anchors":[]},{"item":59,"tag":"EC-3","qty":1,"pn":"D-UT 4-HESI (P/N to confirm)","desc":"End cover for UT 4-HESI","anchors":["TB1-EC-COV"]},{"item":60,"tag":"JMP-1","qty":12,"pn":"FBS 2-6 (3030161)","desc":"Plug-in bridge, 2-pos, for UT 4","anchors":[]},{"item":61,"tag":"MRK-1","qty":4,"pn":"ZB 6 (1051003)","desc":"Marker card ZB 6 (6.2 mm), blank/printed","anchors":[]},{"item":62,"tag":"RAIL-1","qty":1,"pn":"0801733","desc":"DIN rail NS 35/7,5 perforated, 2 m","anchors":["RLY-RAIL","CTRL-RAIL"]},{"item":63,"tag":"WD-F","qty":1,"pn":"G1X2LG6 + C1LG6","desc":"Slotted wire duct 1 W x 2 H in, 6 ft, with c..","anchors":["FD-1","FD-2","FD-3"]},{"item":64,"tag":"TD-1","qty":1,"pn":"G1X1LG6 + C1LG6","desc":"Slotted wire duct 1 W x 1 H in, 6 ft, with c..","anchors":["TD-1"]},{"item":65,"tag":"WD-1","qty":1,"pn":"G1X2LG6 + C1LG6","desc":"Slotted wire duct 1 W x 2 H in, 6 ft, with c..","anchors":["WD-1"]},{"item":66,"tag":"WD-3","qty":1,"pn":"G1X1.5LG6 + C1LG6 (confirm)","desc":"Slotted wire duct 1 W x 1.5 H in, 6 ft, with..","anchors":["WD-3"]},{"item":67,"tag":"GRM-1","qty":1,"pn":"GEE99F-A-C","desc":"Edge grommet, low profile, slotted, for 0.06..","anchors":[]},{"item":68,"tag":"RIV-1","qty":1,"pn":"-","desc":"Nylon push rivets for wire duct, 3/16 in hol..","anchors":[]},{"item":69,"tag":"SPW-1","qty":1,"pn":"T38F-C","desc":"Spiral wrap 3/8 in, natural, 100 ft roll","anchors":[]},{"item":70,"tag":"TIE-1","qty":1,"pn":"-","desc":"Cable tie mounts, screw type (bag of 25)","anchors":[]},{"item":71,"tag":"NP-1","qty":1,"pn":"-","desc":"Engraved nameplate \"HVAC CONTROLS TRAINING S..","anchors":[]},{"item":72,"tag":"TAG-1","qty":1,"pn":"-","desc":"Device tag labels (allowance)","anchors":[]},{"item":73,"tag":"HW-1","qty":1,"pn":"-","desc":"Mounting hardware kit (#8 / #10 screws, nuts..","anchors":[]}]};
+(async function () {
+const T = THREE;
+const qs = new URLSearchParams(location.search);
+if (qs.get('still')) document.body.classList.add('still');
+const canvas = document.getElementById('c');
+const renderer = new T.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputEncoding = T.sRGBEncoding;
+
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap;
+renderer.localClippingEnabled = true;
+const scene = new T.Scene();
+const dark = matchMedia('(prefers-color-scheme: dark)').matches && !qs.get('still');
+scene.background = new T.Color(0xffffff);
+const camera = new T.OrthographicCamera(-1, 1, 1, -1, -2000, 2000);
+scene.add(new T.HemisphereLight(0xffffff, 0xb9bec3, 0.85));
+const key = new T.DirectionalLight(0xffffff, 0.55); key.position.set(28, 92, 66); key.target.position.set(-3, 36, -5);
+key.castShadow = true; key.shadow.mapSize.set(4096, 4096); key.shadow.bias = -0.0004; key.shadow.normalBias = 0.02; key.shadow.radius = 2;
+Object.assign(key.shadow.camera, { left: -52, right: 52, top: 52, bottom: -52, near: 10, far: 260 });
+scene.add(key); scene.add(key.target);
+const fill = new T.DirectionalLight(0xffffff, 0.3); fill.position.set(-70, 45, 50); scene.add(fill);
+const rim = new T.DirectionalLight(0xffffff, 0.2); rim.position.set(25, 40, -90); scene.add(rim);
+
+// ---------- helpers
+const M2IN = 39.3700787;
+const MAT = {};
+function mat(color, o = {}) {
+  const k = color + JSON.stringify(o);
+  if (!MAT[k]) { const m = new T.MeshStandardMaterial(Object.assign({ color, roughness: 0.6, metalness: 0.05 }, o)); m.color.convertSRGBToLinear(); if (o.emissive !== undefined) m.emissive.convertSRGBToLinear(); MAT[k] = m; }
+  return MAT[k];
+}
+function tex(wIn, hIn, draw, ppi = 64) {
+  const c = document.createElement('canvas');
+  c.width = Math.max(16, Math.round(wIn * ppi)); c.height = Math.max(16, Math.round(hIn * ppi));
+  const g = c.getContext('2d'); draw(g, c.width, c.height, ppi);
+  const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding; t.anisotropy = 4; return t;
+}
+const texLoader = new T.TextureLoader();
+const TEX = {};
+function photo(name) {
+  if (!TEX[name]) { TEX[name] = texLoader.load('textures/' + name + '.jpg?v=20261031b'); TEX[name].encoding = T.sRGBEncoding; TEX[name].anisotropy = 8; }
+  return TEX[name];
+}
+const TEXA = {};
+const CLONES = new Map();
+function photoA(name) { if (!TEXA[name]) { TEXA[name] = texLoader.load('textures/' + name + '.png?v=20261031b', t => { (CLONES.get(t) || []).forEach(c => { c.image = t.image; c.needsUpdate = true; }); }); TEXA[name].encoding = T.sRGBEncoding; TEXA[name].anisotropy = 8; TEX['A_' + name] = TEXA[name]; } return TEXA[name]; }
+function box(w, h, d, m, faceMat) {
+  const mats = faceMat ? [m, m, m, m, faceMat, m] : m;
+  return new T.Mesh(new T.BoxGeometry(w, h, d), mats);
+}
+function rbody(w, h, d, r, m) { const sh = new T.Shape(); const x = -w / 2, y = -h / 2;
+  sh.moveTo(x + r, y); sh.lineTo(x + w - r, y); sh.quadraticCurveTo(x + w, y, x + w, y + r); sh.lineTo(x + w, y + h - r); sh.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  sh.lineTo(x + r, y + h); sh.quadraticCurveTo(x, y + h, x, y + h - r); sh.lineTo(x, y + r); sh.quadraticCurveTo(x, y, x + r, y);
+  return new T.Mesh(new T.ExtrudeGeometry(sh, { depth: d, bevelEnabled: false, curveSegments: 10 }), m); }
+let showWires = false, showDuct = true, showCovers = true;
+const DUCTS3D = [];   // every duct body (face, panel rear, backpan) for the duct / cover toggles
+// Panduit-style slotted duct: base + finger walls + cover. Long axis along X (rotate for vertical). Depth along +Z.
+function slottedDuct(len, wid, dep, cut) {   // cut: [a, b] along the length (local, centred) = base opening over a 0.50 in slot
+  const g = new T.Group(); const dm = mat(0xc4c7c9, { roughness: 0.85 }); const cm = mat(0xb5b9bc, { roughness: 0.85 });
+  if (cut) { const [a, b] = cut, ow = 0.5;
+    [[-len / 2, a], [b, len / 2]].forEach(([u, v]) => { if (v - u > 0.01) { const pc = box(v - u, wid, 0.08, dm); pc.position.set((u + v) / 2, 0, 0.04); g.add(pc); } });
+    [-1, 1].forEach(sd => { const st = box(b - a, (wid - ow) / 2, 0.08, dm); st.position.set((a + b) / 2, sd * (ow / 2 + (wid - ow) / 4), 0.04); g.add(st); });
+  } else { const base = box(len, wid, 0.08, dm); base.position.z = 0.04; g.add(base); }
+  { const n = Math.max(2, Math.ceil(len / 12) + 1); for (let i = 0; i < n; i++) { let x = -len / 2 + 0.4 + i * (len - 0.8) / (n - 1);
+      if (cut && x > cut[0] - 0.35 && x < cut[1] + 0.35) x = (x - cut[0] < cut[1] - x) ? cut[0] - 0.4 : cut[1] + 0.4;
+      const rv = cyl(0.13, 0.06, mat(0x2f3134), 12); rv.position.set(x, 0, 0.11); g.add(rv); } }   // push rivets
+  const pitch = 0.5, fw = 0.25; const n = Math.max(1, Math.floor((len - 0.1) / pitch));
+  const x0 = -((n - 1) * pitch) / 2;
+  [-1, 1].forEach(sd => { for (let i = 0; i < n; i++) { const f = box(fw, 0.07, dep - 0.1, dm); f.position.set(x0 + i * pitch, sd * (wid / 2 - 0.035), (dep - 0.1) / 2 + 0.08); g.add(f); }
+    const rail = box(len, 0.07, 0.25, dm); rail.position.set(0, sd * (wid / 2 - 0.035), 0.2); g.add(rail); });
+  const cover = box(len, wid + 0.06, 0.08, cm); cover.position.z = dep - 0.02; cover.userData.cover = true; g.add(cover);
+  DUCTS3D.push(g); return g;
+}
+function cyl(r, len, m, seg = 32) { const g = new T.CylinderGeometry(r, r, len, seg); g.rotateX(Math.PI / 2); return new T.Mesh(g, m); }
+function txt(g, s, x, y, size, color = '#1d2329', weight = 700, align = 'center') {
+  g.font = `${weight} ${size}px Inter, Arial, sans-serif`; g.fillStyle = color; g.textAlign = align; g.textBaseline = 'middle'; g.fillText(s, x, y);
+}
+const pickables = [];
+function tag(obj, info) { obj.traverse(o => { if (o.isMesh) { o.userData.info = info; pickables.push(o); } }); obj.userData.root = true; return obj; }
+const SRC = { 'vendor 3D': 'vendor 3D (STEP)', photo: 'photo', modeled: 'modeled' };
+function infoOf(p, extra, model) {
+  return { tag: p.tag, pn: p.pn, name: p.name, mfr: p.mfr, conf: p.conf, model: model || p.model,
+    dims: `${p.w.toFixed(2)} W x ${p.h.toFixed(2)} H in face; ${p.front.toFixed(2)} in in front` + (p.behind ? `, ${p.behind.toFixed(2)} in behind` : ''), extra };
+}
+
+// ---------- GLB loading (models/ next to this page; page must be served over http)
+const loader = new T.GLTFLoader();
+const GLB = {};
+const NAMES = ['XB5AVB1', 'XB5AVB3', 'XB5AVB4', 'XB5AVB5', 'XB5AA31', 'XB5AA42', 'XB5AD33', 'RXZE2S108M', 'RXM2AB2B7',
+  'Hoffman_CSD302412_body', 'Hoffman_CSD302412_door', 'Hoffman_CSPB3024_swingpanel', 'NS35-7.5-PERF_0801733_1m',
+  'UT4_3044102_gray', 'UT4-RD_3045127_red', 'UT4-BK_3045143_black', 'UT4-PE_3044128_greenyellow', 'UT4-HESI_3074169',
+  'D-UT2.5-10_3047028', 'E-UK_1201442', 'Belimo_LMB24-SR-T', 'EtlinDaniels_FP-108-1-24VAC', 'EtlinDaniels_B-4_guard',
+  'Finder_19.50.0.024.0000', 'Bourns_3590S_H-22', 'WallPlate_1G_blank_BAPI'];
+await Promise.all(NAMES.map(n => new Promise(res => (window.GLB_B64 && window.GLB_B64[n] ? loader.parse(Uint8Array.from(atob(window.GLB_B64[n]), c => c.charCodeAt(0)).buffer, '', g => { GLB[n] = g.scene; res(); }, () => res()) : loader.load('models/' + n + '.glb', g => { GLB[n] = g.scene; res(); }, undefined, () => res())))));
+const missing = NAMES.filter(n => !GLB[n]);
+document.getElementById('load').textContent = missing.length ? `${missing.length} models missing - keep models.js (or models/) next to this page` : '';
+if (!missing.length) document.getElementById('load').style.display = 'none';
+function glb(name, opts = {}) {
+  if (!GLB[name]) return null;
+  const o = GLB[name].clone(true);
+  o.scale.setScalar(M2IN);
+  if (opts.sx) o.scale.x *= opts.sx;
+  o.traverse(m => { if (m.isMesh) { m.material = m.material.clone(); const mm = m.material;
+    if (name.startsWith('NS35')) { mm.color.set(0xdfe3e6).convertSRGBToLinear(); }
+    if (name === 'XB5AVB5' && /_lens/.test((m.name || '') + (mm.name || ''))) mm.color.set(0xf2c200).convertSRGBToLinear();
+    if (opts.recolor) mm.color.set(opts.recolor).convertSRGBToLinear();
+    if (opts.powder) { const l = mm.color.r * 0.3 + mm.color.g * 0.59 + mm.color.b * 0.11; if (l > 0.35) { mm.color.set(opts.powder).convertSRGBToLinear(); mm.metalness = 0; mm.roughness = 0.58; } }
+    const nm = (m.name || '') + (mm.name || '');
+    if (/_lens/.test(nm)) { mm.roughness = 0.22; mm.emissive = mm.color.clone().multiplyScalar(0.35); }
+    else if (/_cap|_button/.test(nm)) { mm.roughness = 0.3; mm.emissive = mm.color.clone().multiplyScalar(0.12); }
+    else if (mm.metalness < 0.5) mm.roughness = Math.max(mm.roughness, 0.42);
+    if (opts.clip) mm.clippingPlanes = opts.clip;
+    mm.side = T.DoubleSide; } });
+  return o;
+}
+const ph = (w, h, d, c) => { const b = box(w, h, d, mat(c)); b.position.z = d / 2; return b; };   // placeholder
+
+// ---------- geometry constants (inches). x right, y up, z toward viewer; door inside face at z = 0
+const E = DATA.encl, PN = DATA.panel;
+const EW = E.w, EH = E.h, ED = E.d, Y0 = 24.0;
+const BACK_Z = -302.8 / 25.4;                // body back outside face (procedural body: door gap 43 mm = nVent 1.71 in default)
+const CY_ = Y0 + EH / 2;
+const PX0 = -PN.w / 2, PTOP = CY_ + PN.h / 2;
+const PZ = -E.setback;
+const BZ = -E.usable;
+const RAL7035 = 0xcbd0cc;
+const steel = mat(RAL7035, { roughness: 0.55, metalness: 0.0 });
+const steelDark = mat(0x8d9295, { roughness: 0.5, metalness: 0.3 });
+const white = mat(0xf3f3ef, { roughness: 0.5, metalness: 0.0 });
+
+// ---------- enclosure body (procedural GLB from nVent dims) with cuttable right wall
+const encl = new T.Group(); scene.add(encl);
+const bodyClip = [new T.Plane(new T.Vector3(0, -1, 0), Y0 + EH + 0.02), new T.Plane(new T.Vector3(0, 1, 0), -(Y0 - 0.02))];
+const body = glb('Hoffman_CSD302412_body', { powder: RAL7035 });
+let rwMeshes = [];
+if (body) {
+  body.position.set(0, CY_, BACK_Z); encl.add(body);
+  body.traverse(m => { if (m.isMesh) { rwMeshes.push(m); m.material.clippingPlanes = bodyClip; } });
+} else {
+  const wt = 0.07;
+  [[EW, EH, wt, 0, CY_, BACK_Z + wt / 2], [wt, EH, -BACK_Z, -EW / 2, CY_, BACK_Z / 2], [EW, wt, -BACK_Z, 0, Y0 + EH, BACK_Z / 2], [EW, wt, -BACK_Z, 0, Y0, BACK_Z / 2]].forEach(([w, h, d, x, y, z]) => {
+    const b = box(w, h, d, steel); b.position.set(x, y, z); encl.add(b); });
+  const rw = box(wt, EH, -BACK_Z, mat(0xc9ccc9, { transparent: true })); rw.position.set(EW / 2, CY_, BACK_Z / 2); encl.add(rw); rwMeshes.push(rw);
+}
+tag(encl, { tag: 'ENC-1', pn: 'CSD302412', name: 'CONCEPT single-door enclosure, Type 4/12, 16 ga body', mfr: 'nVent Hoffman', dims: '30 H x 24 W x 12 D in; door 210 deg', conf: 'HIGH', model: 'modeled' });
+// backpan CP3024 (EST position)
+const bp = new T.Group(); scene.add(bp); const BPG = [bp];   // groups that move with the backpan in the exploded view
+const BPW = 22.2, BPH = 28.2, BPT = 0.105, NOTCH_X = 0.60, NOTCH_W = 0.30, NOTCH_D = 0.45, HOLE_X = 0.30, HOLE_Y = 0.60, HOLE_R = 0.11;   // corner features EST (nVent stock photo)
+{ const sh = new T.Shape(), hw = BPW / 2, hh = BPH / 2, r = NOTCH_W / 2;
+  // outline with an open U-notch on the short (top / bottom) edge at each corner
+  sh.moveTo(-hw, -hh);
+  [[-1, -1], [1, -1]].forEach(([sx]) => { const cx = sx * (hw - NOTCH_X); sh.lineTo(cx - r, -hh); sh.lineTo(cx - r, -hh + NOTCH_D - r); sh.absarc(cx, -hh + NOTCH_D - r, r, Math.PI, 0, true); sh.lineTo(cx + r, -hh); });
+  sh.lineTo(hw, -hh); sh.lineTo(hw, hh);
+  [1, -1].forEach(sx => { const cx = sx * (hw - NOTCH_X); sh.lineTo(cx + r, hh); sh.lineTo(cx + r, hh - NOTCH_D + r); sh.absarc(cx, hh - NOTCH_D + r, r, 0, Math.PI, true); sh.lineTo(cx - r, hh); });
+  sh.lineTo(-hw, hh); sh.lineTo(-hw, -hh);
+  [-1, 1].forEach(sx => [-1, 1].forEach(sy => { const h = new T.Path(); h.absarc(sx * (hw - HOLE_X), sy * (hh - HOLE_Y), HOLE_R, 0, Math.PI * 2, false); sh.holes.push(h); }));
+  const gb = new T.ExtrudeGeometry(sh, { depth: BPT, bevelEnabled: false, curveSegments: 16 });
+  const bpp = new T.Mesh(gb, white); bpp.position.set(0, CY_, BZ - BPT); bp.add(bpp);
+  // collar studs welded to the back wall, one in each corner notch (EST), nut on the backpan face
+  const sm = mat(0xa9adb1, { metalness: 0.6, roughness: 0.35 }), z0 = BACK_Z + 0.06, z1 = BZ - BPT;
+  [-1, 1].forEach(sx => [-1, 1].forEach(sy => { const x = sx * (hw - NOTCH_X), y = CY_ + sy * (hh - 0.30);
+    const col = cyl(0.22, z1 - z0, sm, 20); col.position.set(x, y, (z0 + z1) / 2); scene.add(col);
+    const sh_ = cyl(0.125, BPT + 0.45, sm, 12); sh_.position.set(x, y, z1 + (BPT + 0.45) / 2); bp.add(sh_);
+    const wsh = cyl(0.31, 0.06, mat(0xc4c7ca, { metalness: 0.6 }), 20); wsh.position.set(x, y, BZ + 0.03); bp.add(wsh);   // flat washer
+    const nut = cyl(0.25, 0.22, mat(0x8e9296, { metalness: 0.6 }), 6); nut.position.set(x, y, BZ + 0.17); bp.add(nut);
+    tag(nut, { tag: 'BPN-1', pn: 'Backpan nut + washer (verify supplied with enclosure / panel)', name: 'Holds the backpan on the collar stud at its corner notch', mfr: 'generic', dims: '1/4 in (EST)', conf: 'LOW', model: 'modeled' });
+    tag(col, { tag: 'STUD', pn: 'Enclosure collar stud (factory)', name: 'Backpan mounting collar stud in the corner notch (position EST from nVent stock photo)', mfr: 'nVent Hoffman', dims: '0.44 in collar (EST)', conf: 'LOW', model: 'modeled' }); })); }
+tag(bp, { tag: 'BP-1', pn: 'CP3024', name: 'CONCEPT backpan on collar studs (face %s in behind door, EST)'.replace('%s', E.usable.toFixed(2)), mfr: 'nVent Hoffman', dims: '~22.2 x 28.2 in', conf: 'MED', model: 'modeled' });
+// adjustable-depth rails (schematic) at top and bottom
+(function () {
+  const g = new T.Group();
+  [Y0 + 0.55, Y0 + EH - 0.55].forEach(y => [-EW / 2 + 0.55, EW / 2 - 0.55].forEach(x => { const r = box(0.6, 0.35, -BACK_Z - 0.8, mat(0xb8b9b4, { metalness: 0.5, roughness: 0.4 })); r.position.set(x, y, BACK_Z / 2 - 0.2); g.add(r); }));
+  scene.add(g);
+  tag(g, { tag: 'SP-2 / SP-3', pn: 'CSPBADB + CAM124 (verify kit)', name: 'Adjustable-depth rails + adapter brackets carrying the swing panel at 4.00 in setback (schematic)', mfr: 'nVent Hoffman', dims: 'setback range: confirm with nVent', conf: 'LOW', model: 'modeled' });
+})();
+// backpan TB-2 + duct (Phoenix GLBs on rail)
+(function () {
+  const g = new T.Group(); g.position.set(PX0 + 12.5, PTOP - 4.6, BZ); scene.add(g); BPG.push(g);   // TB-2 at panel x 9.0..16.0, y 4.6
+  const rail = glb('NS35-7.5-PERF_0801733_1m', { sx: 7.0 / M2IN }); if (rail) g.add(rail);
+  const seq = ['E-UK_1201442', 'UT4-PE_3044128_greenyellow', 'UT4-PE_3044128_greenyellow', ...Array(6).fill('UT4_3044102_gray'), 'UT4-BK_3045143_black', 'UT4-BK_3045143_black', 'UT4-RD_3045127_red', 'UT4-RD_3045127_red', 'D-UT2.5-10_3047028', 'E-UK_1201442'];
+  const W = { 'E-UK_1201442': 0.374, 'D-UT2.5-10_3047028': 0.087 };
+  let x = -3.0;
+  seq.forEach(n => { const w = W[n] || 0.244; const o = glb(n); if (o) { o.position.x = x + w / 2; g.add(o); } x += w; });
+  const duct = slottedDuct(19, 1.0, 2.0); duct.position.set(-1.5, -3.5, 0); g.add(duct);   // WD-1 panel x 1.5..20.5, y 7.6..8.6
+  const duct2 = slottedDuct(9, 1.0, 2.0); duct2.rotation.z = Math.PI / 2; duct2.position.set(-10.5, -8.5, 0); g.add(duct2);   // WD-2 panel x 2.0, y 8.6..17.6
+  tag(g, { tag: 'TB-2 / WD-1', pn: 'Phoenix UT 4 on 0801733; Panduit duct', name: 'Backpan 24 VAC landing: TR-1 X1/X2 + ground in, hinge loop out; meter zone (top left) kept bare', mfr: 'Phoenix Contact / Panduit', dims: 'rail 7.0 in; duct 1 x 2 in', conf: 'MED', model: 'modeled' });
+  // TR-1 TR100VA001 foot-mounted on the backpan (top right); 120 V cord in through a cord grip in the top wall
+  const tr = DATA.tr, tg = new T.Group(); tg.position.set(PX0 + tr.x + tr.w / 2, PTOP - (tr.y + tr.h / 2), BZ); scene.add(tg); BPG.push(tg);
+  const core = box(tr.w - 0.6, tr.h - 0.2, tr.depth - 0.25, mat(0x3a3d40)); core.position.z = 0.25 + (tr.depth - 0.25) / 2; tg.add(core);
+  const foot = box(tr.w, tr.h, 0.08, mat(0x9ea3a7, { metalness: 0.4 })); foot.position.z = 0.04; tg.add(foot);
+  [-1, 1].forEach(sd => { const bell = box(0.32, tr.h - 0.1, tr.depth - 0.4, mat(0x9ea3a7, { metalness: 0.4 })); bell.position.set(sd * (tr.w / 2 - 0.3), 0, 0.2 + (tr.depth - 0.4) / 2); tg.add(bell); });
+  const cb = cyl(0.22, 0.25, mat(0x111111), 16); cb.position.set(0.9, 0.5, tr.depth + 0.1); tg.add(cb);       // breaker reset
+  const hub = cyl(0.42, 0.45, mat(0xb9bcbe, { metalness: 0.5 }), 6); hub.rotation.x = Math.PI / 2; hub.position.set(-0.4, tr.h / 2 + 0.2, tr.depth / 2); tg.add(hub);
+  tag(tg, { tag: 'TR-1', pn: 'Functional Devices TR100VA001', name: 'Transformer 120 to 24 VAC, 96 VA Class 2, built-in breaker; foot-mounted on the backpan; 120 V stays on the backpan', mfr: 'Functional Devices', dims: '4.085 x 2.515 x 3.03 in (axes EST)', conf: 'MED', model: 'modeled' });
+  const cgX = PX0 + tr.x + 1.2, cg = new T.Group(); cg.position.set(cgX, Y0 + EH, BZ + 3.0); scene.add(cg); window.__feedA = cg;
+  const nut = cyl(0.55, 0.3, mat(0x2b2d30), 6); nut.rotation.x = Math.PI / 2; nut.position.y = 0.2; cg.add(nut);
+  const dome = cyl(0.42, 0.55, mat(0x2b2d30), 16); dome.rotation.x = Math.PI / 2; dome.position.y = 0.55; cg.add(dome);
+  tag(cg, { tag: 'CG-1', pn: '1/2 in NPT liquid-tight cord grip (EST)', name: '120 V cord entry through a top knockout; primary connection by the electrician (conduit / hardwire also possible)', mfr: 'generic', dims: '1/2 in NPT', conf: 'LOW', model: 'modeled' });
+  window.__trTop = new T.Vector3(PX0 + tr.x + 0.8, PTOP - tr.y + 0.05, BZ + 1.6);
+  // option B (hardwired): conduit hub + EMT stub above the top knockout, FMC flex whip down to the TR-1 primary
+  const fb = new T.Group(); scene.add(fb); fb.visible = false; window.__feedB = fb;
+  const hb = new T.Group(); hb.position.set(cgX, Y0 + EH, BZ + 3.0); fb.add(hb);
+  const hn = cyl(0.62, 0.22, mat(0x9ea3a7, { metalness: 0.5 }), 6); hn.rotation.x = Math.PI / 2; hn.position.y = 0.15; hb.add(hn);
+  const hbody = cyl(0.5, 0.6, mat(0xb9bcbe, { metalness: 0.5 }), 20); hbody.rotation.x = Math.PI / 2; hbody.position.y = 0.55; hb.add(hbody);
+  const emt = cyl(0.35, 6.0, mat(0xc9ccce, { metalness: 0.5 }), 20); emt.rotation.x = Math.PI / 2; emt.position.y = 3.85; hb.add(emt);
+  const coup = cyl(0.42, 0.5, mat(0xb9bcbe, { metalness: 0.5 }), 20); coup.rotation.x = Math.PI / 2; coup.position.y = 6.9; hb.add(coup);
+  const tt = window.__trTop, w0 = new T.Vector3(cgX, Y0 + EH - 0.3, BZ + 3.0);
+  const fc = new T.CatmullRomCurve3([w0, new T.Vector3(w0.x, w0.y - 1.2, w0.z - 0.2), new T.Vector3((w0.x + tt.x) / 2 + 0.6, tt.y + 1.0, tt.z + 0.6), new T.Vector3(tt.x, tt.y + 0.4, tt.z), tt]);
+  fb.add(new T.Mesh(new T.TubeGeometry(fc, 50, 0.3, 10, false), mat(0x8d9295, { metalness: 0.4, roughness: 0.6 })));
+  tag(fb, { tag: 'OPTION B', pn: '1/2 in conduit hub + EMT stub + FMC flex whip (EST)', name: 'Hardwired feed: electrician runs 120 V from a building circuit in conduit to the top knockout; flex whip to the TR-1 primary; local disconnect as required. Hardwired option requires electrician and building circuit; confirm with AHJ/electrician.', mfr: 'generic', dims: '1/2 in', conf: 'LOW', model: 'modeled' });
+})();
+
+// ---------- door (pivot from procedural model); inside face plain
+const doorPivot = new T.Group(); doorPivot.position.set(-295.8 / 25.4, CY_, BACK_Z + 293.8 / 25.4); scene.add(doorPivot);
+(function () {
+  const d = glb('Hoffman_CSD302412_door', { powder: RAL7035 });
+  if (d) doorPivot.add(d); else { const f = box(23.9, 29.9, 0.9, steel); f.position.set(11.95, 0, 0); doorPivot.add(f); }
+  const np = box(10, 1.5, 0.06, mat(0x1d2329), new T.MeshStandardMaterial({ map: tex(10, 1.5, (g, W, H) => { g.fillStyle = '#1d2329'; g.fillRect(0, 0, W, H); txt(g, 'HVAC CONTROLS TRAINING STATION', W / 2, H / 2, H * 0.36, '#ffffff'); }) }));
+  np.position.set(11.9, 11.5, 0.5); doorPivot.add(np);
+  tag(doorPivot, { tag: 'DOOR', pn: 'CSD302412 door', name: 'Door (opens 210 deg), nameplate outside, plain inside', mfr: 'nVent Hoffman', dims: '-', conf: 'MED', model: 'modeled' });
+})();
+
+// ---------- swing panel: pivot 12 mm left of the panel edge (procedural model), face at PZ
+const spPivot = new T.Group(); spPivot.position.set(PX0 - 12 / 25.4, CY_, PZ); scene.add(spPivot);
+const sp = new T.Group(); sp.position.set(12 / 25.4, PTOP - CY_, 0); spPivot.add(sp);    // sp: device frame (x right, -y down from panel top)
+(function () {
+  const pnl = glb('Hoffman_CSPB3024_swingpanel', { powder: 0xf3f3ef });
+  if (pnl) spPivot.add(pnl); else { const plate = box(PN.w, PN.h, PN.t, white); plate.position.set(PN.w / 2, -PN.h / 2, -PN.t / 2); sp.add(plate); }
+  tag(pnl || sp.children[0], { tag: 'SP-1', pn: 'CSPB3024 (+ CSPBADB on adjustable rails)', name: 'CONCEPT B-style swing-out panel; face set 4.00 in behind door; max swing 94 deg', mfr: 'nVent Hoffman', dims: '21.75 W x 27.72 H in', conf: 'MED', model: 'modeled' });
+})();
+function at(obj, p, z = 0) { obj.position.set(p.x + p.w / 2, -(p.y + p.h / 2), z); sp.add(obj); return obj; }
+const F = DATA.parts;
+const RAIL_H = 7.5 / 25.4;
+
+// controller skins
+let skin = 'm4';
+const skinMats = [];
+function cropTex(t, crop) { if (!crop) return t; const c = t.clone(); c.offset.x = crop[0]; c.repeat.x = crop[1]; if (t.image && t.image.complete) c.needsUpdate = true; else { if (!CLONES.has(t)) CLONES.set(t, []); CLONES.get(t).push(c); } return c; }
+function ctrlFace(key, crop) { const m = new T.MeshStandardMaterial({ map: cropTex(photoA(key + '_m4'), crop), roughness: 0.62, transparent: true, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  m.userData.key = key; m.userData.crop = crop; skinMats.push(m); return m; }
+function applySkin() { skinMats.forEach(m => { m.map = cropTex(photoA(m.userData.key + '_' + skin), m.userData.crop); m.needsUpdate = true; });
+  Object.values(ctrlBody).forEach(m => m.color.set(skin === 'm4' ? 0x26292c : 0xeeeeea).convertSRGBToLinear());
+  document.getElementById('skin').textContent = skin === 'm4' ? 'M4 black' : 'FX white'; }
+const ctrlBody = { a: new T.MeshStandardMaterial({ color: 0x26292c, roughness: 0.62 }) };
+
+F.forEach(p => {
+  const k = p.kind; let g = new T.Group();
+  if (k === 'ctrl' || k === 'cvm') {
+    const d = k === 'cvm' ? 2.87 : (p.tag === 'TP-XPM-1' ? 1.75 : 2.13);
+    const key = { 'TP-FCU-1': 'cgm', 'TP-XPM-1': 'xpm', 'TP-VAV-1': 'cvm' }[p.tag];
+    if (k === 'cvm') {   // body between the ears; ears on a base plane
+      const bx0 = 0.77, bw = 5.05, cx = bx0 + bw / 2 - p.w / 2;
+      const b = rbody(bw - 0.2, p.h - 0.2, d, 0.3, ctrlBody.a); b.position.set(cx, 0, 0); g.add(b);
+      const f = new T.Mesh(new T.PlaneGeometry(bw, p.h), ctrlFace(key, [bx0 / p.w, bw / p.w])); f.position.set(cx, 0, d + 0.004); g.add(f);
+      const ears = new T.Mesh(new T.PlaneGeometry(p.w, p.h), ctrlFace(key)); ears.position.z = 0.16; g.add(ears);
+    } else {
+      const b = rbody(p.w - 0.24, p.h - 0.24, d, 0.3, ctrlBody.a); g.add(b);
+      const f = new T.Mesh(new T.PlaneGeometry(p.w, p.h), ctrlFace(key)); f.position.z = d + 0.004; g.add(f);
+    }
+    if (k === 'cvm') {
+      // no shaft stub / bearing: the CVM is mounted by its ears only and its set-screw hub turns visibly on its own
+    }
+    at(g, p, k === 'cvm' ? 0 : RAIL_H); tag(g, infoOf(p, k === 'cvm' ? 'Landscape; screw-mounted through its ears (no DIN rail); set-screw hub in the right ear moves visibly (no shaft stub)' : (p.note || 'DIN mount; trainees land on the controller terminals (2.0 in clearance top/bottom)'), 'photo'));
+  } else if (k === 'ns') {
+    const b = rbody(p.w, p.h, p.front, 0.32, mat(0xf7f7f5, { roughness: 0.5 })); g.add(b);
+    const f = new T.Mesh(new T.PlaneGeometry(p.w, p.h), new T.MeshStandardMaterial({ map: photoA('ns8000'), roughness: 0.5, transparent: true, alphaTest: 0.5 })); f.position.z = p.front + 0.004; g.add(f);
+    g.userData.softEdge = true; at(g, p); tag(g, infoOf(p, 'SA bus device'));
+  } else if (k === 'plate') {
+    const o = glb('WallPlate_1G_blank_BAPI', { powder: 0xaeb3b7 }); if (o) { o.rotation.set(0, 0, 0); g.add(o); }
+    else { const b = box(p.w, p.h, 0.22, mat(0xd3d6d8)); b.position.z = 0.11; g.add(b); }
+    g.userData.softEdge = true; at(g, p); tag(g, infoOf(p, 'Flat single-gang plain plate, 2 screws, square to the panel; 10K-2 thermistor behind'));
+  } else if (k === 'psh') {
+    const side = mat(0xb4b8bb, { metalness: 0.12, roughness: 0.5 });
+    const b = box(p.w, p.h, 4.5, side, new T.MeshStandardMaterial({ map: photo('psh100a'), roughness: 0.5, metalness: 0.2 })); b.position.z = 1.5 - 2.25; g.add(b);
+    at(g, p); tag(g, infoOf(p, 'Through a 5.20 x 4.60 in face cutout: 1.50 front / 3.00 behind; line voltage enters from behind (hinge loop)'));
+  } else if (k === 'fan') {
+    const so = p.standoff || 1.0, f = glb('EtlinDaniels_FP-108-1-24VAC'), gF = glb('EtlinDaniels_B-4_guard'), gB = glb('EtlinDaniels_B-4_guard');
+    if (f) { f.position.z = so; g.add(f); } else { const b = ph(p.w, p.h, 1.5, 0x2b2b2b); b.position.z += so; g.add(b); }
+    if (gF) { gF.position.z = so + 38.8 / 25.4; g.add(gF); }
+    if (gB) { gB.rotation.y = Math.PI; gB.position.z = so - 0.02; g.add(gB); }          // back guard faces the panel
+    const hp = 104.8 / 25.4 / 2;
+    [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(([sx, sy]) => { const st = cyl(0.125, so - 0.3, mat(0xc9ccce, { metalness: 0.5 }), 6); st.position.set(sx * hp, sy * hp, (so - 0.3) / 2); g.add(st); });
+    at(g, p); tag(g, infoOf(p, '24 VAC, 0.3 A (7.2 VA); demo load on 4x 1 in standoffs (free intake, no panel cutout); B-4 guards front and back'));
+  } else if (k === 'tbrail') {
+    const rg = new T.Group(); rg.position.set(0, -(DATA.tb.y - (p.y + p.h / 2)), 0); g.add(rg);
+    const rail = glb('NS35-7.5-PERF_0801733_1m', { sx: p.w / M2IN }); if (rail) rg.add(rail);
+    const N = { RD: 'UT4-RD_3045127_red', BK: 'UT4-BK_3045143_black', GY: 'UT4_3044102_gray', WH: 'UT4_3044102_gray', PE: 'UT4-PE_3044128_greenyellow', HESI: 'UT4-HESI_3074169', 'End cover': 'D-UT2.5-10_3047028', 'End clamp': 'E-UK_1201442' };
+    p.blocks.filter(b => b.kind === 'SW').forEach(b => { const cx = b.x - p.x - p.w / 2 + b.w / 2, sg = new T.Group(); sg.position.x = cx; rg.add(sg);
+      const body = box(b.w - 0.02, b.len, b.front - 0.30, mat(0xeeeeea)); body.position.z = 0.30 + (b.front - 0.30) / 2; sg.add(body);
+      const mid = box(b.w - 0.02, 1.75, 0.35, mat(0xe4e4df)); mid.position.z = b.front + 0.17; sg.add(mid);
+      [-0.34, 0.34].forEach(x => { const h = box(0.24, 0.42, 0.42, mat(0x1d1d1d)); h.position.set(x, 0.18, b.front + 0.55); sg.add(h); });   // toggles (up = ON)
+      tag(sg, { tag: 'PANEL POWER', pn: 'Eaton FAZ-C4/2-NA', name: '2-pole 4 A supplementary protector used as the PANEL POWER switch (24 VAC hot + COM), ahead of fuses F1 / F2', mfr: 'Eaton', dims: '1.38 W x 3.15 H, 2.97 in front', conf: 'MED', model: 'modeled' }); });
+    p.blocks.forEach(b => { if (b.kind === 'SW') return; const FCK = { FCBU: 0x2a62b8, FCWH: 0xf4f4f0 }; const o = glb(N[FCK[b.kind] ? 'GY' : b.kind], b.kind === 'WH' ? { recolor: 0xf4f4f0 } : (FCK[b.kind] ? { recolor: FCK[b.kind] } : {})); const cx = b.x - p.x - p.w / 2 + b.w / 2;
+      if (o) { o.position.x = cx; rg.add(o); } else { const bb = box(b.w - 0.01, b.len, b.front, mat(new T.Color(b.color).getHex())); bb.position.set(cx, 0, b.front / 2); rg.add(bb); } });
+    at(g, p); tag(g, infoOf(p, 'PANEL POWER 2-pole switch, then the pre-wired 24 VAC section (2 UT 4-HESI fuses, 6 red 24 V after the fuses), pre-wired COM / ground test section (6 black, 3 PE), 5 gray spares left unconnected for optional devices, FC BUS A / FC BUS B on UT 4 blocks (blue / white alternating). Meter probes in the terminal test openings', 'modeled'));
+    [p.sw_legend, ...(p.fc_legends || [])].filter(Boolean).forEach(lg => { const LW = lg.w || 1.4; const lp = box(LW, 0.42, 0.06, mat(0x141414, { roughness: 0.35 }), new T.MeshStandardMaterial({ roughness: 0.35, map: tex(LW, 0.42, (g2, W, H) => { g2.fillStyle = '#141414'; g2.fillRect(0, 0, W, H); g2.strokeStyle = '#3a3a3a'; g2.lineWidth = 3; g2.strokeRect(2, 2, W - 4, H - 4); txt(g2, lg.text, W / 2, H / 2 + 1, H * (LW < 1.2 ? 0.30 : 0.34), '#f4f4f0', 700); }, 320) }));
+      lp.position.set(lg.x, -lg.y, 0.025); sp.add(lp); tag(lp, { tag: lg.text + ' legend', pn: 'LEG-1', name: 'Engraved legend plate', mfr: 'generic', dims: LW.toFixed(2) + ' x 0.42 in', conf: '-', model: 'modeled' }); });
+  } else if (k === 'rlyrail') {
+    const rail = glb('NS35-7.5-PERF_0801733_1m', { sx: p.w / M2IN }); if (rail) g.add(rail); else g.add(ph(p.w, 1.378, 0.3, 0x8d9295));
+    const ry = 0; const rl = DATA.parts.find(q => q.tag === 'RLY-RAIL');
+    [0.1 + 0.187, p.w - 0.1 - 0.187].forEach(x => { const ec = glb('E-UK_1201442'); if (ec) { ec.position.set(x - p.w / 2, ry, 0); g.add(ec); } });
+    rl.relays.forEach(r => {
+      const cx = r.x - p.x + r.w / 2 - p.w / 2;
+      const s = glb('RXZE2S108M'), rr = glb('RXM2AB2B7');
+      const grp = new T.Group(); grp.position.set(cx, 0, 7.5 / 25.4); g.add(grp);
+      if (s) grp.add(s); if (rr) grp.add(rr);
+      if (!s) grp.add(ph(r.w, r.h, 2.4, 0x4f6d86));
+      const relayPart = DATA.parts.find(q => q.tag === r.tag);
+      tag(grp, infoOf(relayPart, 'RXM2AB2B7 relay in RXZE2S108M socket (Schneider STEP); stack 3.03 in in front of the panel', 'vendor 3D'));
+    });
+    const ao = rl.ao; const fo = glb('Finder_19.50.0.024.0000');
+    const aoG = new T.Group(); aoG.position.set(ao.x - p.x + ao.w / 2 - p.w / 2, 0, 0); g.add(aoG);
+    if (fo) aoG.add(fo); else aoG.add(ph(ao.w, ao.h, 2.6, 0x5d6670));
+    tag(aoG, infoOf(DATA.parts.find(q => q.tag === 'AO-1'), 'Finder 19.50: Auto = pass controller 0-10 V, Hand = front pot', 'modeled'));
+    at(g, p);
+    tag(g.children[0] || g, infoOf(p, 'Relay rail 0801733', 'modeled'));
+  } else if (k === 'meter') {
+    const bz = rbody(p.w - 0.04, p.h - 0.04, 0.47, 0.14, mat(0x5d6064)); g.add(bz);
+    const ft = tex(p.w, p.h, (g2, W, H, pp) => { g2.fillStyle = '#2a2d31'; g2.fillRect(0, 0, W, H); g2.fillStyle = '#0b0b0c'; g2.fillRect(0.25 * pp, 0.22 * pp, W - 0.5 * pp, 0.95 * pp);
+        txt(g2, p.disp, W / 2, 0.70 * pp, 0.72 * pp, '#ff3b2f', 700); txt(g2, 'DPM2', 0.45 * pp, H - 0.30 * pp, 0.16 * pp, '#c9cdd0', 700, 'left'); txt(g2, p.label, W - 0.45 * pp, H - 0.30 * pp, 0.16 * pp, '#c9cdd0', 700, 'right');
+        ['P', '^', 'v', 'E'].forEach((c, i) => { const x = W / 2 + (i - 1.5) * 0.42 * pp; g2.fillStyle = '#45494e'; g2.fillRect(x - 0.15 * pp, H - 0.52 * pp, 0.3 * pp, 0.2 * pp); }); }, 160);
+    const fm = new T.Mesh(new T.PlaneGeometry(p.w - 0.06, p.h - 0.06), new T.MeshStandardMaterial({ map: ft, roughness: 0.4 })); fm.position.z = 0.474; g.add(fm);
+    const body2 = box(p.cut[0] - 0.05, p.cut[1] - 0.05, p.behind, mat(0x222222)); body2.position.z = -PN.t - p.behind / 2; g.add(body2);
+    at(g, p); tag(g, infoOf(p, `${p.label} from XPM CO, 0-10 V; cutout 3.62 x 1.77; keep backpan clear behind`));
+  } else if (k === 'act') {
+    // housing 116 x 66 mm (lid 50.8 mm) on a 0.10 in standoff; shaft 19.5 mm from the clamp end; photo on the lid
+    const MM = 1 / 25.4, sx = 1.45 - p.w / 2, hc = sx - 19.5 * MM + 58 * MM;     // housing centre x
+    const a = glb('Belimo_LMB24-SR-T');
+    if (a) { a.position.set(hc, 0, 0.1); g.add(a); } else { const b = box(116 * MM, 66 * MM, 50.8 * MM, mat(0xf08a00)); b.position.set(hc, 0, 0.1 + 25.4 * MM); g.add(b); }
+    const ph_ = new T.Mesh(new T.PlaneGeometry(124.25 * MM, 73.75 * MM), new T.MeshStandardMaterial({ map: photoA('lmb24srt'), roughness: 0.5, transparent: true, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -1 }));
+    ph_.position.set(hc - 58 * MM - 16.23 * MM + 124.25 * MM / 2, 0, 0.1 + 50.8 * MM + 0.01); g.add(ph_);
+    at(g, p); tag(g, infoOf(p, 'Terminal-block version (no cable). Mounted by its anti-rotation bracket/tab screwed to the panel; no shaft, the clamp turns freely so trainees can watch it move. Face = photo on a true-size housing'));
+  } else if (['pilot', 'pb', 'sel'].includes(k)) {
+    const o = glb(p.glb);
+    if (o) g.add(o); else { const b = cyl(0.59, p.front, mat(new T.Color(p.color).getHex())); b.position.z = p.front / 2; g.add(b); }
+    at(g, p); tag(g, infoOf(p, 'Legend: ' + p.legend + '. Schneider STEP: bezel in front, contact block behind the panel'));
+  } else if (k === 'duct') {
+    const vert = p.h > p.w; const sl = DATA.slots.find(q => q.duct === p.tag); const d = slottedDuct(vert ? p.h : p.w, vert ? p.w : p.h, p.front, sl ? [sl.x - (p.x + p.w / 2), sl.x + sl.w - (p.x + p.w / 2)] : null);
+    if (vert) d.rotation.z = Math.PI / 2; g.add(d);
+    at(g, p); tag(g, infoOf(p, 'Panduit-style slotted duct 1 W x 2 D with cover; 0.5 in min to controller terminal rows', 'modeled'));
+  } else if (k === 'pot') {
+    const o = glb('Bourns_3590S_H-22'); if (o) g.add(o); else g.add(ph(p.w, p.h, 1.0, 0x202020));
+    at(g, p); tag(g, infoOf(p, 'Legend: ' + p.legend));
+  }
+  if (p.legend) {
+    const lp = box(1.4, 0.42, 0.06, mat(0x141414, { roughness: 0.35 }), new T.MeshStandardMaterial({ roughness: 0.35, map: tex(1.4, 0.42, (g2, W, H) => { g2.fillStyle = '#141414'; g2.fillRect(0, 0, W, H); g2.strokeStyle = '#3a3a3a'; g2.lineWidth = 3; g2.strokeRect(2, 2, W - 4, H - 4); txt(g2, p.legend, W / 2, H / 2 + 1, H * (p.legend.length > 9 ? 0.34 : 0.46), '#f4f4f0', 700); }, 320) }));
+    lp.position.set(p.x + p.w / 2, -(p.y + p.h / 2 + (p.legend_dy || 1.34)), 0.025); sp.add(lp); tag(lp, { tag: p.tag + ' legend', pn: 'LEG-1', name: 'Engraved legend plate', mfr: 'generic', dims: '1.40 x 0.42 in', conf: '-', model: 'modeled' });
+  }
+});
+// controller DIN rail (CGM + XPM); none behind the CVM (screw-mounted by its ears)
+{ const cr = DATA.ctrl_rail; const r = glb('NS35-7.5-PERF_0801733_1m', { sx: (cr.x1 - cr.x0) / M2IN });
+  if (r) { const g = new T.Group(); g.add(r); g.position.set((cr.x0 + cr.x1) / 2, -cr.y, 0); sp.add(g);
+    tag(g, { tag: 'CTRL-RAIL', pn: 'NS 35/7,5 PERF 0801733', name: 'DIN rail for CGM09090 + XPM04060', mfr: 'Phoenix Contact', dims: `${(cr.x1 - cr.x0).toFixed(2)} in`, conf: 'MED', model: 'modeled' }); } }
+// SA / FC bus on face, rear wiring
+function tube(points, r, m, parent) { const c = new T.CatmullRomCurve3(points.map(p => new T.Vector3(...p))); const t = new T.Mesh(new T.TubeGeometry(c, 60, r, 8, false), m); parent.add(t); return t; }
+const PD = {}; F.forEach(p => PD[p.tag] = p);
+const cg = PD['TP-FCU-1'], xp = PD['TP-XPM-1'], cv = PD['TP-VAV-1'];
+const wireCols = [0xc62828, 0x202020, 0x9aa0a6, 0x2d7dd2, 0xf2c200];
+function bundle(pts, n, parent) { for (let i = 0; i < n; i++) { const off = (i - n / 2) * 0.17; tube(pts.map(p => [p[0] + off, p[1] + off * 0.5, p[2]]), 0.08, mat(wireCols[i % wireCols.length]), parent); } }
+const rear = new T.Group(); sp.add(rear); rear.visible = false;
+// (rear wiring is built with the face wiring below)
+tag(rear, { tag: 'REAR WIRING', pn: '(wire - not in BOM)', name: 'Behind-panel wiring to meters, XB5 blocks, pot; tie-mounted', mfr: '-', dims: '-', conf: '-', model: 'modeled' });
+// hinge loop (24 VAC Class 2 only)
+const lvMat = mat(0x1a1a1a);
+let loopMesh = null, lvMesh = null;
+function shadowize(root) { root.traverse(o => { if (o.isMesh && !o.userData.noCast) { const mm = Array.isArray(o.material) ? o.material[0] : o.material; o.castShadow = !(mm && mm.transparent); o.receiveShadow = true; } }); }
+function updateLoops() {
+  [loopMesh].forEach(m => { if (m) scene.remove(m); });
+  const lp = DATA.loop.panel, a = sp.localToWorld(new T.Vector3(lp[0], -lp[1], lp[2]));
+  const a2 = sp.localToWorld(new T.Vector3(1.2, -lp[1] - 0.6, -1.4));               // tie mount on the panel rear, hinge edge
+  const b = new T.Vector3(PX0 + DATA.loop_bp[0], PTOP - DATA.loop_bp[1], BZ + 1.0);   // landing: backpan WD-1 / WD-2 corner
+  const mid = new T.Vector3(Math.min(a2.x, b.x) - 2.2, (a2.y + b.y) / 2 - 2.0, (a2.z + b.z) / 2);   // service slack for the 90 deg swing
+  const c = new T.CatmullRomCurve3([a, a2, mid, new T.Vector3(b.x - 0.6, b.y - 0.8, b.z + 1.0), b]);
+  loopMesh = new T.Group(); scene.add(loopMesh);
+  loopMesh.add(new T.Mesh(new T.TubeGeometry(c, 80, 0.2, 10, false), mat(0x55595d, { roughness: 0.7 })));
+  const hel = [], N = 600, fr = c.computeFrenetFrames(N, false);
+  for (let i = 0; i <= N; i++) { const u = i / N, ang = u * c.getLength() / 0.35 * 2 * Math.PI; hel.push(c.getPointAt(u).addScaledVector(fr.normals[i], 0.22 * Math.cos(ang)).addScaledVector(fr.binormals[i], 0.22 * Math.sin(ang))); }
+  loopMesh.add(new T.Mesh(new T.TubeGeometry(new T.CatmullRomCurve3(hel), N, 0.035, 5, false), mat(0xe8e4d6)));   // spiral wrap
+  [a2, b].forEach(q => { const tm = box(0.75, 0.75, 0.2, mat(0x2b2d30)); tm.position.copy(q); loopMesh.add(tm); });   // tie mounts both sides
+  loopMesh.visible = showWires;
+  tag(loopMesh, { tag: 'HINGE LOOP', pn: 'Panduit T38F-C spiral wrap + tie mounts', name: 'Hinge-side harness: 24 VAC, COM and ground to backpan TB-2, spiral-wrapped with service slack for the 90 deg swing, tie mounts on both sides', mfr: 'Panduit', dims: '~30 in', conf: 'MED', model: 'modeled' });
+  // 120 V no longer crosses the hinge: the cord goes straight to TR-1 on the backpan (drawn with the backpan wiring)
+}
+
+// ---------- wall mount: 2 horizontal 1-5/8 in strut channels (P1000) on a light wall plane; enclosure bolted from inside
+// through its back mounting holes (EST 1.50 in in from each back edge): 3/8-16 bolt + flat washer + nVent sealing washer into a spring nut
+const stand = new T.Group(); scene.add(stand);
+(function () {
+  const S = 1.625, zw = BACK_Z - S, sm = mat(0xc3c7c9, { metalness: 0.4, roughness: 0.55 }), L = 30;
+  const wall = new T.Mesh(new T.PlaneGeometry(56, 60), mat(0xdcdedb, { roughness: 0.95 })); wall.position.set(0, Y0 + EH / 2, zw - 0.01); wall.receiveShadow = true; wall.userData.noCast = true; wall.userData.noEdge = true; stand.add(wall);
+  const HX = 22.50 / 2, HY = [Y0 + EH / 2 - 28.50 / 2, Y0 + EH / 2 + 28.50 / 2];   // nVent Spec-00286 CSD302412 Mounting G x H 28.50 x 22.50
+  HY.forEach(y => { const g = new T.Group(); g.position.set(0, y, zw); stand.add(g);
+    const back = box(L, S, 0.1, sm); back.position.z = 0.05; g.add(back);
+    [-1, 1].forEach(sd => { const w = box(L, 0.1, S, sm); w.position.set(0, sd * (S / 2 - 0.05), S / 2); g.add(w);
+      const lip = box(L, 0.35, 0.1, sm); lip.position.set(0, sd * (S / 2 - 0.22), S - 0.05); g.add(lip); });
+    tag(g, { tag: 'STR-1', pn: 'Unistrut P1000 (1-5/8 in, 12 ga), 30 in', name: 'Horizontal wall strut at the enclosure back mounting-hole row (28.50 in centres, nVent Spec-00286); wall anchors by the installer', mfr: 'Unistrut', dims: '1.625 x 1.625 x 30 in', conf: 'MED', model: 'modeled' });
+    [-HX, HX].forEach(x => {   // bolt: head + washers inside on the back wall (behind the backpan), shank through the wall into the spring nut
+      const hw = mat(0x55595d, { metalness: 0.5 }), bg = new T.Group(); bg.position.set(x, y, 0); stand.add(bg);
+      const sw = cyl(0.42, 0.125, mat(0x2a2a2a, { roughness: 0.8 }), 20); sw.position.z = BACK_Z + 0.06 + 0.0625; bg.add(sw);
+      const fw = cyl(0.41, 0.083, hw, 20); fw.position.z = BACK_Z + 0.06 + 0.125 + 0.0415; bg.add(fw);
+      const hd = cyl(0.33, 0.234, hw, 6); hd.position.z = BACK_Z + 0.06 + 0.208 + 0.117; bg.add(hd);
+      const sh = cyl(0.1875, 1.0, hw, 12); sh.position.z = BACK_Z - 0.40; bg.add(sh);
+      const nut = box(0.85, 0.85, 0.35, hw); nut.position.z = zw + S - 0.32; bg.add(nut);
+      tag(bg, { tag: 'BLT-1 / SN-1', pn: '3/8-16 bolt + flat washer + nVent sealing washer; Unistrut P1008-EG spring nut', name: 'Enclosure to strut, from inside through the back mounting hole (22.50 x 28.50 in pattern, nVent Spec-00286). Hole 0.15 in outside the backpan edges; washer edge reaches about 0.29 in under the backpan corner, 0.42 in below it (EST). Mount the enclosure before the backpan.', mfr: 'Generic / nVent / Unistrut', dims: '3/8-16', conf: 'LOW', model: 'modeled' }); });
+  });
+})();
+
+// panel-rear wire duct (behind the rail row)
+DATA.rear_ducts.forEach(rd => { const vert = rd.h > rd.w; const sl = vert ? null : DATA.slots.find(q => q.y > rd.y && q.y < rd.y + rd.h && q.x >= rd.x && q.x + q.w <= rd.x + rd.w + 0.01);
+  const d = slottedDuct(vert ? rd.h : rd.w, 1.0, 1.5, sl ? [-(sl.x + sl.w - (rd.x + rd.w / 2)), -(sl.x - (rd.x + rd.w / 2))] : null); if (vert) d.rotation.z = Math.PI / 2;
+  const o = new T.Group(); o.add(d); o.rotation.y = Math.PI; o.position.set(rd.x + rd.w / 2, -(rd.y + rd.h / 2), -PN.t); sp.add(o);
+  tag(o, { tag: rd.tag, pn: 'Panduit G1X1.5LG6 + C1LG6 (confirm)', name: 'Panel-rear slotted duct, ' + rd.run, mfr: 'Panduit', dims: `1.0 W x 1.5 D in, ${Math.max(rd.w, rd.h).toFixed(2)} in`, conf: 'MED', model: 'modeled' }); });
+// pass-through slots (0.75 x 6 in) under each face duct, lined with edge grommet; visible with the duct hidden
+DATA.slots.forEach(sl => { const g = new T.Group(); g.position.set(sl.x + sl.w / 2, -(sl.y + sl.h / 2), 0); sp.add(g);
+  [0.004, -PN.t - 0.004].forEach(z => { const hole = new T.Mesh(new T.PlaneGeometry(sl.w, sl.h), mat(0x16181a, { roughness: 1 })); hole.position.z = z; if (z < 0) hole.rotation.y = Math.PI; g.add(hole); });
+  const gm = mat(0xe8e4d6, { roughness: 0.7 }), t = 0.06;
+  [[sl.w, t, 0, sl.h / 2 - t / 2], [sl.w, t, 0, -sl.h / 2 + t / 2], [t, sl.h, sl.w / 2 - t / 2, 0], [t, sl.h, -sl.w / 2 + t / 2, 0]].forEach(([w, h, x, y]) => { const b = box(w, h, 0.13, gm); b.position.set(x, y, -PN.t / 2); g.add(b); });   // low-profile grommet inside the slot edge
+  tag(g, { tag: sl.tag, pn: 'Panduit GEE99F-A-C edge grommet', name: `Pass-through slot 0.50 x 6.00 in centred under the ${sl.duct} duct base (0.25 in flat each side), low-profile edge grommet; matching opening in the duct base`, mfr: 'Panduit', dims: '0.50 x 6.00 in', conf: 'MED', model: 'modeled' }); });
+// wiring model (viewer only): 0.06 in dia wires, SA bus 4-wire twisted, FC bus 3-wire twisted
+const wiresG = new T.Group(); sp.add(wiresG); wiresG.visible = false;
+const WCOL = { red: 0xc8202a, black: 0x1a1a1a, white: 0xeeeeea, blue: 0x2266cc, green: 0x2e9e4f };
+const wmat = {}; function wmt(c) { if (!wmat[c]) { wmat[c] = new T.MeshStandardMaterial({ color: c, roughness: 0.45 }); wmat[c].color.convertSRGBToLinear(); } return wmat[c]; }
+function wcurve(pts) { return new T.CatmullRomCurve3(pts.map(q => new T.Vector3(q[0], -q[1], q[2])), false, 'centripetal', 0.5); }
+(DATA.wires || []).forEach(wr => {
+  const c = wcurve(wr.pts), segs = Math.max(40, wr.pts.length * 24);
+  if (wr.fc) {   // FC bus cable: grey jacket, 1 in of stripped twisted conductors, then each conductor fanned out to its own terminal
+    const cols = [0xeeeeea, 0x1a1a1a, 0x2266cc, 0xb9b2a4], FCOL = { white: 0xeeeeea, black: 0x1a1a1a, blue: 0x2266cc };   // JCI FC bus: white +, black -, blue COM, bare drain
+    const jc = wcurve(wr.fc.jacket); wiresG.add(new T.Mesh(new T.TubeGeometry(jc, Math.max(60, wr.fc.jacket.length * 24), 0.105, 10, false), wmt(0x2f6fc0)));   // blue jacket
+    wr.fc.twist.forEach(tp => { const c2 = wcurve(tp), sg = 48, fr = c2.computeFrenetFrames(sg, false), L = c2.getLength();
+      for (let k = 0; k < 4; k++) { const pts = []; for (let i = 0; i <= sg; i++) { const u = i / sg, p0 = c2.getPointAt(u), a = 2 * Math.PI * (k / 4 + u * L / 0.8);
+          pts.push(p0.clone().addScaledVector(fr.normals[i], 0.055 * Math.cos(a)).addScaledVector(fr.binormals[i], 0.055 * Math.sin(a))); }
+        wiresG.add(new T.Mesh(new T.TubeGeometry(new T.CatmullRomCurve3(pts), sg, 0.04, 6, false), wmt(cols[k]))); } });
+    wr.fc.fans.forEach(f => { const c3 = wcurve(f.pts);
+      if (f.color === 'drain') {   // bare drain in a clear sleeve over the fan-out (shield not grounded in the panel)
+        wiresG.add(new T.Mesh(new T.TubeGeometry(c3, 24, 0.022, 6, false), wmt(0xb9b2a4)));
+        wiresG.add(new T.Mesh(new T.TubeGeometry(c3, 24, 0.048, 8, false), new T.MeshStandardMaterial({ color: 0xf4f7f7, roughness: 0.15, transparent: true, opacity: 0.45, depthWrite: false })));
+      } else wiresG.add(new T.Mesh(new T.TubeGeometry(c3, 24, 0.04, 6, false), wmt(FCOL[f.color]))); });
+    return;
+  }
+  if (wr.type === 'bundle4' || wr.type === 'bundle3') {
+    const fc = wr.color === 'FC';   // FC bus: 18 AWG 3-cond. shielded (+ red, - black, COM white, bare drain), own bundle
+    const n = wr.type === 'bundle4' ? 4 : 3, cols = fc ? [0xeeeeea, 0x1a1a1a, 0x2266cc, 0xb9b2a4] : (n === 4 ? [0xc8202a, 0x1a1a1a, 0xeeeeea, 0x2266cc] : [0x2266cc, 0xeeeeea, 0x6d7276]);
+    const fr = c.computeFrenetFrames(segs * 2, false), L = c.getLength(), turns = L / (fc ? 0.8 : 0.6), rr = fc ? 0.055 : 0.045, wrad = fc ? 0.04 : 0.03;
+    for (let k = 0; k < n; k++) { const pts = []; for (let i = 0; i <= segs * 2; i++) { const u = i / (segs * 2), p0 = c.getPointAt(u), a = 2 * Math.PI * (k / n + turns * u);
+        pts.push(p0.clone().addScaledVector(fr.normals[i], rr * Math.cos(a)).addScaledVector(fr.binormals[i], rr * Math.sin(a))); }
+      wiresG.add(new T.Mesh(new T.TubeGeometry(new T.CatmullRomCurve3(pts), segs * 2, wrad, 6, false), wmt(cols[k]))); }
+  } else wiresG.add(new T.Mesh(new T.TubeGeometry(c, segs, 0.03, 6, false), wmt(WCOL[wr.color] || 0x888888)));
+});
+const bpWires = new T.Group(); scene.add(bpWires); bpWires.visible = false;
+(DATA.bp_wires || []).forEach(wr => { const c = new T.CatmullRomCurve3(wr.pts.map(q => new T.Vector3(PX0 + q[0], PTOP - q[1], BZ + q[2])), false, 'centripetal', 0.5);
+  bpWires.add(new T.Mesh(new T.TubeGeometry(c, 40, 0.03, 6, false), wmt(WCOL[wr.color] || 0x888888))); });
+const cordA = new T.Group(); bpWires.add(cordA);
+{ const tt = window.__trTop, cg = new T.Vector3(tt.x + 0.4, Y0 + EH + 0.3, BZ + 3.0);
+  const c = new T.CatmullRomCurve3([new T.Vector3(cg.x, cg.y + 3.0, cg.z + 1.0), cg, new T.Vector3(cg.x, cg.y - 1.5, cg.z - 0.3), new T.Vector3(tt.x, tt.y + 0.6, tt.z), tt]);
+  cordA.add(new T.Mesh(new T.TubeGeometry(c, 40, 0.17, 8, false), mat(0x1a1a1a))); }
+let feed = (qs.get('feed') || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+function applyFeed() { window.__feedA.visible = feed === 'A'; cordA.visible = feed === 'A'; window.__feedB.visible = feed === 'B';
+  document.getElementById('feed').textContent = feed === 'A' ? 'Feed: cord (A)' : 'Feed: hardwired (B)'; }
+document.getElementById('feed').addEventListener('click', () => { feed = feed === 'A' ? 'B' : 'A'; applyFeed(); });
+applyFeed();
+tag(bpWires, { tag: 'BACKPAN WIRING', pn: 'see wire_list.csv (B rows); SJOOW 14/3 cord', name: '120 V cord through the cord grip to TR-1 (electrician); TR-1 X1/X2 + ground to TB-2; TB-2 to the hinge loop', mfr: '-', dims: '-', conf: '-', model: 'modeled' });
+tag(wiresG, { tag: 'WIRING', pn: '(wire - see wire_list.csv)', name: 'Representative wiring: red 24 VAC, black COM, white/blue signal, green ground, twisted SA / FC bus; terminals -> duct -> slots -> panel rear -> panel-mount devices', mfr: '-', dims: '0.06 in dia', conf: '-', model: 'modeled' });
+// contact shadows (soft dark footprint) under face parts
+const csTex = (function () { const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.filter = 'blur(10px)'; g.fillStyle = 'rgba(0,0,0,1)'; g.fillRect(22, 22, 84, 84); const t = new T.CanvasTexture(c); return t; })();
+const csMat = new T.MeshBasicMaterial({ color: 0x000000, alphaMap: csTex, transparent: true, opacity: 0.42, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+if (false) F.filter(p => !p.sub && p.shape !== 'circle' && !['tbrail', 'rlyrail'].includes(p.kind)).forEach(p => {
+  const pad = Math.min(0.9, 0.25 + p.front * 0.18); const m = new T.Mesh(new T.PlaneGeometry(p.w + pad * 2.2, p.h + pad * 2.2), csMat);
+  m.position.set(p.x + p.w / 2 + p.front * 0.05, -(p.y + p.h / 2) - p.front * 0.08, 0.012); m.userData.noCast = true; sp.add(m); });
+if (false) [...PD['RLY-RAIL'].relays.map(r => PD[r.tag]), PD['AO-1'], PD['TB-1']].forEach(p => {
+  const m = new T.Mesh(new T.PlaneGeometry(p.w + 0.5, (p.kind === 'tbrail' ? 2.1 : p.h) + 0.5), csMat); m.position.set(p.x + p.w / 2, -(p.kind === 'tbrail' ? TBY : p.y + p.h / 2) - 0.12, 0.012); m.userData.noCast = true; sp.add(m); });
+
+// ---------- CAD look: neutral matte materials + crisp edge outlines
+const edgeMat = new T.LineBasicMaterial({ color: 0x23272b, transparent: true, opacity: 0.85 });
+function isShown(o) { while (o) { if (o.visible === false) return false; o = o.parent; } return true; }
+const toEdge = [];
+scene.traverse(o => {
+  if (!o.isMesh) return;
+  const mats = Array.isArray(o.material) ? o.material : [o.material];
+  mats.forEach(mm => { if (!mm || !mm.isMeshStandardMaterial) return;
+    mm.envMap = null; mm.metalness = 0; mm.roughness = Math.max(mm.roughness, 0.75); mm.emissive && mm.emissive.setRGB(0, 0, 0);
+    if (mm.map && skinMats.indexOf(mm) < 0 && mm.map.image === undefined) {}
+    if (skinMats.indexOf(mm) >= 0) mm.color.setRGB(0.93, 0.93, 0.93); mm.needsUpdate = true; });
+  let p = o, skip = false; while (p) { if (p.userData.noEdge) { skip = true; break; } p = p.parent; }
+  if (!skip && !o.geometry.type.startsWith('Plane') && !o.geometry.type.startsWith('Tube') && !o.geometry.type.startsWith('Circle')) toEdge.push(o);
+});
+const edgeMatBody = edgeMat.clone(); edgeMatBody.clippingPlanes = bodyClip;
+const edgeSoft = new T.LineBasicMaterial({ color: 0xc4c8cb });
+function softOf(o) { while (o) { if (o.userData.softEdge) return true; o = o.parent; } return false; }
+toEdge.forEach(o => { const hi = o.geometry.attributes.position && o.geometry.attributes.position.count > 6000; const e = new T.LineSegments(new T.EdgesGeometry(o.geometry, hi ? 40 : 20), rwMeshes.includes(o) ? edgeMatBody : (softOf(o) ? edgeSoft : edgeMat)); e.raycast = () => {}; o.add(e); });
+// lens / cap colours back to readable (matte) values
+scene.traverse(o => { if (o.isMesh && o.material && o.material.isMeshStandardMaterial && /_lens/.test((o.name || '') + (o.material.name || ''))) { o.material.emissive.copy(o.material.color).multiplyScalar(0.25); } });
+
+// ---------- state + views (orthographic)
+let angle = 90, doorAng = 200, cutWall = false, doorShown = true;
+const cutPlane = new T.Plane(new T.Vector3(-1, 0, 0), EW / 2 - 0.25);
+// ---------- door / swing-panel interlock (both hinged on the left). The panel angle is clamped to
+// min(its own wall limit, the largest angle at which no front-most panel point crosses the door's inside face).
+const DOOR_IN_Z = 9.0 / 25.4;          // door inside face in door-pivot local z (pivot is 9 mm behind it)
+const DOOR_W = 606.6 / 25.4, DOOR_H2 = 759 / 25.4 / 2, DOOR_T = 22 / 25.4, IL_MARGIN = 0.15;
+const IL_PTS = [];
+F.filter(p => !p.sub && p.front > 0).forEach(p => [[0, 0], [1, 0], [0, 1], [1, 1]].forEach(([u, v]) => IL_PTS.push(new T.Vector3(p.x + u * p.w, -(p.y + v * p.h), p.front))));
+[[0, 0], [PN.w, 0], [0, -PN.h], [PN.w, -PN.h]].forEach(([x, y]) => IL_PTS.push(new T.Vector3(x, y, 0.05)));   // panel face corners
+const OWN_LIMIT = Math.min(E.swing_max, (DATA.swing && DATA.swing.limit_deg) || E.swing_max);
+function ilClearance(a, d) {   // min distance (in) from panel points to the door inside face, inside the door outline; +inf if none overlap
+  // pure math (both pivots are scene-root groups rotating about +y): world = P + Ry(-a)(S + q); door local = Ry(+d)(world - D)
+  const ca = Math.cos(-a * Math.PI / 180), sa = Math.sin(-a * Math.PI / 180), cd = Math.cos(d * Math.PI / 180), sd = Math.sin(d * Math.PI / 180);
+  const P = spPivot.position, S = sp.position, D = doorPivot.position; let m = Infinity;
+  for (const q of IL_PTS) {
+    const lx = S.x + q.x, ly = S.y + q.y, lz = S.z + q.z;
+    const wx = P.x + lx * ca + lz * sa, wy = P.y + ly, wz = P.z - lx * sa + lz * ca;
+    const rx = wx - D.x, ry = wy - D.y, rz = wz - D.z;
+    const vx = rx * cd + rz * sd, vy = ry, vz = -rx * sd + rz * cd;
+    if (vx > -0.2 && vx < DOOR_W + 0.2 && Math.abs(vy) < DOOR_H2 + 0.2 && vz < DOOR_IN_Z + DOOR_T) m = Math.min(m, DOOR_IN_Z - vz);
+  }
+  return m;
+}
+// clearance map, built once: LIM[d] = largest panel angle (0.5 deg steps, floored) that clears the door at door angle d (integer deg)
+const DOOR_MAX = 210, LIM = [];
+for (let d = 0; d <= DOOR_MAX; d++) { let lim = 0; if (d >= 1) for (let a = 0; a <= OWN_LIMIT + 1e-6; a += 0.5) { if (ilClearance(a, d) < IL_MARGIN) break; lim = a; } LIM.push(Math.floor(lim)); }
+const LIM_MAX = Math.max(...LIM);
+function panelLimit(d) {   // conservative for a fractional door angle (animation): the smaller of the two neighbouring entries
+  if (!doorShown) return OWN_LIMIT;
+  const c = Math.max(0, Math.min(DOOR_MAX, d)), lo = Math.floor(c), hi = Math.ceil(c);
+  return Math.min(LIM[lo], LIM[hi]);
+}
+function doorNeeded(a) {   // smallest door angle whose limit allows panel angle a (door opens only as far as needed)
+  if (!doorShown || a <= 0) return 0;
+  for (let d = 0; d <= DOOR_MAX; d++) if (LIM[d] >= a) return d;
+  return LIM.indexOf(LIM_MAX);
+}
+// ---------- single source of truth: user targets (angT / doorT) + the input that moved last; one solve per frame
+let angT = angle, doorT = doorAng, driver = 'door';
+const RATE_DOOR = 150, RATE_PANEL = 100;   // deg/s
+function solveTargets() {
+  if (!doorShown) { angT = Math.min(angT, OWN_LIMIT); return; }
+  if (driver === 'panel') { angT = Math.max(0, Math.min(angT, OWN_LIMIT, LIM_MAX)); doorT = Math.max(doorT, doorNeeded(angT)); }   // panel drives the door open
+  else { doorT = Math.max(0, Math.min(DOOR_MAX, doorT)); angT = Math.max(0, Math.min(angT, OWN_LIMIT, panelLimit(doorT))); }      // door pushes the panel closed
+}
+const step = (cur, tgt, max) => Math.abs(tgt - cur) <= max ? tgt : cur + Math.sign(tgt - cur) * max;
+function tick(dt) {   // move both toward their targets; the panel is always re-clamped to the door's current limit (never crosses)
+  if (angle === angT && doorAng === doorT) return false;
+  const nd = step(doorAng, doorT, RATE_DOOR * dt);
+  let na = step(angle, angT, RATE_PANEL * dt);
+  na = Math.min(na, panelLimit(nd));   // opening waits for the door; closing the door pushes the panel
+  doorAng = nd; angle = na; applyState(); return true;
+}
+function snap() { solveTargets(); doorAng = doorT; angle = Math.min(angT, panelLimit(doorT)); applyState(); }
+let dragging = null;
+const r1 = v => Math.round(v * 10) / 10;
+window.__interlock = { limit: d => panelLimit(d), clearance: (a, d) => ilClearance(a, d), margin: IL_MARGIN, own: OWN_LIMIT, doorNeeded, LIM,
+  state: () => ({ angle, doorAng, angT, doorT, driver }),
+  settle: (dt = 1 / 60, maxSteps = 2000) => { let worst = Infinity, n = 0; while (n++ < maxSteps && tick(dt)) if (doorShown && doorAng >= 1) worst = Math.min(worst, ilClearance(angle, doorAng)); return { worst, steps: n, angle, doorAng }; } };
+// ---------- exploded view (from the closed position): body stays; backpan, back-of-panel items, swing panel, face devices
+// and door step forward along the depth axis; the strut steps back toward the wall
+const EXPL = { e: 0, face: [], rear: [], base: null };
+const EXP_D = { bp: 12, sp: 23, rear: -6.5, face: 8, door: 44, stand: -4 };   // inches at 100 %
+function explodeInit() {
+  if (EXPL.base) return;
+  const sa = spPivot.rotation.y; spPivot.rotation.y = 0; scene.updateMatrixWorld(true);
+  const pz = spPivot.position.z, bx = new T.Box3(), c = new T.Vector3();
+  sp.children.forEach(ch => { if (ch === wiresG) return; bx.setFromObject(ch); if (bx.isEmpty()) return; bx.getCenter(c);
+    if (c.z > pz + 0.05) EXPL.face.push([ch, ch.position.z]); else if (c.z < pz - 0.15) EXPL.rear.push([ch, ch.position.z]); });
+  spPivot.rotation.y = sa; scene.updateMatrixWorld(true);
+  EXPL.base = { sp: spPivot.position.z, door: doorPivot.position.z, bp: BPG.map(g => [g, g.position.z]), stand: stand.position.z };
+}
+function applyExplode() {
+  explodeInit(); const e = EXPL.e, B = EXPL.base;
+  spPivot.position.z = B.sp + EXP_D.sp * e; doorPivot.position.z = B.door + EXP_D.door * e; stand.position.z = B.stand + EXP_D.stand * e;
+  B.bp.forEach(([g, z]) => g.position.z = z + EXP_D.bp * e);
+  EXPL.face.forEach(([o, z]) => o.position.z = z + EXP_D.face * e); EXPL.rear.forEach(([o, z]) => o.position.z = z + EXP_D.rear * e);
+  const show = e === 0; if (loopMesh) loopMesh.visible = showWires && show; wiresG.visible = showWires && show; bpWires.visible = showWires && show;
+  document.getElementById('expl').value = Math.round(e * 100); document.getElementById('explv').textContent = Math.round(e * 100);
+}
+function setExplode(e) {
+  EXPL.e = Math.max(0, Math.min(1, e));
+  if (EXPL.e > 0) { angT = 0; doorT = 0; driver = 'door'; doorShown = true; angle = 0; doorAng = 0; }   // explode from the closed position
+  applyState();
+}
+function applyState() {
+  const lim = panelLimit(doorAng); if (angle > lim) angle = lim;      // guard: the panel never passes the door
+  spPivot.rotation.y = -angle * Math.PI / 180;
+  doorPivot.rotation.y = -doorAng * Math.PI / 180; doorPivot.visible = doorShown;
+  rwMeshes.forEach(m => { m.material.clippingPlanes = cutWall ? [cutPlane, ...bodyClip] : bodyClip; m.material.needsUpdate = true; });
+  if (typeof edgeMatBody !== 'undefined') { edgeMatBody.clippingPlanes = cutWall ? [cutPlane, ...bodyClip] : bodyClip; edgeMatBody.needsUpdate = true; }
+  scene.updateMatrixWorld(true); updateLoops(); if (typeof EXPL !== 'undefined' && EXPL.base !== undefined) { applyExplode(); scene.updateMatrixWorld(true); }
+  if (dragging !== 'ang') document.getElementById('ang').value = angle;
+  if (dragging !== 'dang') document.getElementById('dang').value = doorAng;
+  document.getElementById('angv').textContent = r1(angle) + ' (max ' + lim + ')'; document.getElementById('dangv').textContent = r1(doorAng);
+  document.getElementById('wall').checked = cutWall;
+}
+const ctl = { target: new T.Vector3(0, 39, -4), r: 200, th: 0, ph: 1.4, half: 22 };
+function setCam() { const s = Math.sin(ctl.ph); camera.position.set(ctl.target.x + ctl.r * s * Math.sin(ctl.th), ctl.target.y + ctl.r * Math.cos(ctl.ph), ctl.target.z + ctl.r * s * Math.cos(ctl.th)); camera.lookAt(ctl.target);
+  const a = innerWidth / innerHeight; camera.left = -ctl.half * a; camera.right = ctl.half * a; camera.top = ctl.half; camera.bottom = -ctl.half; camera.updateProjectionMatrix(); }
+const VIEWS = {
+  iso_open: { a: 75, d: 150, door: true, stand: true, wall: false, target: [-3.0, 38.6, -1.0], dir: [-0.42, 0.32, 0.85], half: 19.5, cap: 'Panel open - isometric (door open, swing panel at 75 deg, backpan behind)' },
+  iso_front: { a: 0, d: 0, door: false, stand: true, wall: false, target: [0, 39, -6], dir: [0.62, 0.42, 0.66], half: 25, cap: 'Isometric front - door removed, swing panel closed, wall-mounted on horizontal strut' },
+  front: { a: 0, d: 0, door: false, stand: false, wall: false, target: [0, 39, -4], dir: [0, 0, 1], half: 17.5, cap: 'Front - orthographic, door removed' },
+  top_feed: { a: 78, d: 150, door: true, stand: false, wall: true, target: [6.8, 53.2, -7.4], dir: [0.42, 0.55, 0.72], half: 5.0, cap: 'Top knockout - power feed' },
+  exploded: { a: 0, d: 0, door: true, stand: true, wall: false, ex: 1, target: [-2.0, 39, 15.0], dir: [0.80, 0.30, 0.52], half: 31, cap: 'Exploded view - enclosure, backpan, back-of-panel items, swing panel, face devices, door' },
+  fc_bus: { a: 0, d: 0, door: false, stand: false, wall: false, target: [-1.6, 34.6, -6.5], dir: [0.18, 0.10, 0.98], half: 6.6, cap: 'FC bus routing - front, duct covers off' },
+  rear_slot: { a: 78, d: 150, door: true, stand: false, wall: false, target: [-9.4, 34.5, 4.7], dir: [0.70, 0.28, 0.66], half: 6.4, cap: 'Rear of swing panel - pass-through slots' },
+  iso_wired: { a: 78, d: 150, door: true, stand: false, wall: true, target: [-7.5, 38.5, 3.0], dir: [0.62, 0.30, 0.72], half: 21, cap: 'Panel swung open - rear of swing panel, hinge loop and backpan' },
+};
+function view(n) {
+  const v = VIEWS[n]; angT = v.a; doorT = v.d; driver = 'door'; doorShown = v.door; cutWall = v.wall; stand.visible = v.stand; EXPL.e = v.ex || 0; snap();
+  ctl.target.set(...v.target); const d = new T.Vector3(...v.dir).normalize();
+  ctl.ph = Math.acos(d.y); ctl.th = Math.atan2(d.x, d.z); ctl.half = v.half; setCam();
+  document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === n));
+  curView = n; document.getElementById('cap').textContent = v.cap;
+}
+let curView = 'iso_open';
+const ptrs = new Map(); let mode = null, last = null, downAt = null, pinch0 = null;
+canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
+  mode = (e.button === 2 || e.shiftKey) ? 'pan' : 'orbit'; if (ptrs.size === 2) { mode = 'pinch'; pinch0 = null; } last = { x: e.clientX, y: e.clientY }; });
+canvas.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return; ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (mode === 'pinch' && ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (pinch0) { ctl.half = Math.min(80, Math.max(3, ctl.half * pinch0.d / d)); pan(c.x - pinch0.c.x, c.y - pinch0.c.y); }
+    pinch0 = { d, c }; setCam(); return;
+  }
+  const dx = e.clientX - last.x, dy = e.clientY - last.y; last = { x: e.clientX, y: e.clientY };
+  if (mode === 'orbit') { ctl.th -= dx * 0.006; ctl.ph = Math.min(3.0, Math.max(0.15, ctl.ph - dy * 0.006)); }
+  else if (mode === 'pan') pan(dx, dy);
+  setCam();
+});
+function pan(dx, dy) { const s = 2 * ctl.half / innerHeight; const right = new T.Vector3().setFromMatrixColumn(camera.matrix, 0); const up = new T.Vector3().setFromMatrixColumn(camera.matrix, 1);
+  ctl.target.addScaledVector(right, -dx * s).addScaledVector(up, dy * s); }
+function endPtr(e) { if (!ptrs.has(e.pointerId)) return; ptrs.delete(e.pointerId);
+  if (downAt && ptrs.size === 0 && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 6 && performance.now() - downAt.t < 500) pick(e);
+  if (ptrs.size === 0) mode = null; else if (ptrs.size === 1) { mode = 'orbit'; last = [...ptrs.values()][0]; } }
+canvas.addEventListener('pointerup', endPtr); canvas.addEventListener('pointercancel', endPtr);
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('wheel', e => { e.preventDefault(); ctl.half = Math.min(80, Math.max(3, ctl.half * Math.exp(e.deltaY * 0.001))); setCam(); }, { passive: false });
+const ray = new T.Raycaster(); const tip = document.getElementById('tip');
+const hl = new T.BoxHelper(undefined, 0x0b5cad); hl.visible = false; scene.add(hl);
+const visHits = (hits) => hits.filter(h => isShown(h.object) && !(h.object.material && h.object.material.transparent && h.object.material.opacity < 0.3));
+function pick(e) {
+  const r = canvas.getBoundingClientRect(); const m = new T.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(m, camera);
+  const hit = visHits(ray.intersectObjects(pickables, false))[0];
+  if (!hit) { tip.style.display = 'none'; hl.visible = false; return; }
+  const i = hit.object.userData.info;
+  let root = hit.object; while (root.parent && !root.userData.root) root = root.parent;
+  hl.setFromObject(root); hl.visible = true;
+  const it = ITEMS.find(q => q.tag === i.tag || (q.anchors || []).includes(i.tag));
+  tip.innerHTML = (it ? `<b>Item ${it.item}</b> &middot; ` : '') + `<b>${i.tag}</b> <span class="pn">${i.pn}</span><br>${i.name}${i.mfr && i.mfr !== '-' ? ' <span class="m">(' + i.mfr + ')</span>' : ''}<br><span class="m">${i.dims}</span>` +
+    (i.conf && i.conf !== '-' ? `<br><span class="${i.conf === 'LOW' ? 'lo' : 'm'}">Dimension confidence: ${i.conf}</span>` : '') + (i.extra ? `<br><span class="m">${i.extra}</span>` : '') +
+    (i.model ? `<br><span class="src">model: ${SRC[i.model] || i.model}</span>` : '');
+  tip.style.display = 'block';
+}
+
+// ---------- item balloons (BOM item numbers) on a 2D overlay
+const ITEMS = DATA.items || [];
+const ov = document.getElementById('ov'); const og = ov.getContext('2d');
+function anchorWorld(a) { const w = anchorBase(a), e = (typeof EXPL !== 'undefined') ? EXPL.e : 0; if (!w || !e) return w;
+  const P_ = PD[a];
+  if (P_) w.z += (P_.front > 0 ? EXP_D.face : EXP_D.rear) * e; else if (a.startsWith('TB1-') || a === 'LEG' || a === 'CTRL-RAIL') w.z += EXP_D.face * e;
+  else if (a === 'WD-3') w.z += EXP_D.rear * e; else if (a === 'WD-1' || a === 'BP') w.z += EXP_D.bp * e; else if (a === 'STAND') w.z += EXP_D.stand * e;
+  return w; }
+function anchorBase(a) {
+  const P_ = PD[a];
+  if (P_) return sp.localToWorld(new T.Vector3(P_.x + P_.w * (P_.kind === 'duct' ? 0.7 : 0.5), -(P_.y + P_.h * (P_.kind === 'duct' ? 0.7 : 0.5)), P_.kind === 'duct' ? P_.front + 0.08 : Math.min(P_.front, 3.0) * 0.9));
+  const bu = DATA.bush.find(b => b[0] === a); if (bu) return sp.localToWorld(new T.Vector3(bu[1], -bu[2], 0.25));
+  if (a.startsWith('TB1-')) { const b = PD['TB-1'].blocks.find(q => q.tag === a); return sp.localToWorld(new T.Vector3(b.x + b.w / 2, -(DATA.tb.y - 0.55), b.front)); }
+  if (a === 'LEG') { const q = PD['PL-PWR']; return sp.localToWorld(new T.Vector3(q.x + q.w / 2, -(q.y + q.h / 2 + 1.34), 0.06)); }
+  if (a === 'CTRL-RAIL') { const cr = DATA.ctrl_rail; return sp.localToWorld(new T.Vector3(cr.x1 - 0.12, -cr.y, 0.3)); }
+  if (a === 'WD-3') return sp.localToWorld(new T.Vector3(16.0, -DATA.rear_duct_y, -1.55));
+  if (a === 'WD-1') return new T.Vector3(PX0 + 14.0, PTOP - 11.0, BZ + 2.1);
+  if (a === 'BP') return new T.Vector3(9.0, CY_ - 6.0, BZ + 0.02);
+  if (a === 'SP') return sp.localToWorld(new T.Vector3(PN.w - 1.0, -(PN.h - 0.7), 0.02));
+  if (a === 'ENC') return new T.Vector3(curView === 'front' ? EW / 2 - 0.3 : 4, curView === 'front' ? Y0 + EH - 3 : Y0 + EH, curView === 'front' ? 0 : -6);
+  if (a === 'RAILS') return new T.Vector3(EW / 2 - 0.55, Y0 + 0.75, -7);
+  if (a === 'STAND') return new T.Vector3(EW / 2 + 1.5, Y0 + EH / 2 + 14.25, BACK_Z - 0.8);
+  if (a === 'DOOR') return doorPivot.localToWorld(new T.Vector3(11.9, -1, 0.3));
+  return null;
+}
+function occluded(w) {
+  const dir = new T.Vector3(); camera.getWorldDirection(dir);
+  const origin = w.clone().addScaledVector(dir, -500);
+  ray.set(origin, dir); const h = visHits(ray.intersectObjects(pickables, false))[0];
+  return h && h.distance < 500 - 0.35;
+}
+let showBal = !!qs.get('balloons'), showTags = false;
+function applyDuct() { DUCTS3D.forEach(d => { d.visible = showDuct; d.traverse(o => { if (o.userData.cover) o.visible = showCovers; }); }); wiresG.visible = showWires; bpWires.visible = showWires; if (loopMesh) loopMesh.visible = showWires; }
+function drawBalloons() {
+  const W = ov.width = innerWidth * devicePixelRatio, H = ov.height = innerHeight * devicePixelRatio; const k = devicePixelRatio;
+  og.clearRect(0, 0, W, H); if (!showBal) return;
+  scene.updateMatrixWorld(true);
+  const pts = [];
+  ITEMS.forEach(it => { for (const a of it.anchors || []) { if (a === 'STAND' && !stand.visible) continue; if (a === 'DOOR' && !doorPivot.visible) continue;
+    const w = anchorWorld(a); if (!w) continue; if (a !== 'STAND' && occluded(w)) continue;
+    const v = w.clone().project(camera); if (Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue;
+    pts.push({ it, x: (v.x + 1) / 2 * W, y: (1 - v.y) / 2 * H }); break; } });
+  // cluster anchors that sit close together -> one leader, stacked balloons
+  const cl = [];
+  pts.sort((a, b) => a.y - b.y).forEach(p => { const c = cl.find(q => Math.hypot(q.x - p.x, q.y - p.y) < 30 * k && q.its.length < 8);
+    if (c) c.its.push(p.it); else cl.push({ x: p.x, y: p.y, its: [p.it] }); });
+  pts.length = 0; cl.forEach(c => { c.its.sort((a, b) => a.item - b.item); pts.push(c); });
+  // model screen bounds (enclosure + panel)
+  const bb = new T.Box3().setFromObject(encl); bb.union(new T.Box3().setFromObject(spPivot));
+  let minX = 1e9, maxX = -1e9;
+  for (const x of [bb.min.x, bb.max.x]) for (const y of [bb.min.y, bb.max.y]) for (const z of [bb.min.z, bb.max.z]) { const v = new T.Vector3(x, y, z).project(camera); minX = Math.min(minX, (v.x + 1) / 2 * W); maxX = Math.max(maxX, (v.x + 1) / 2 * W); }
+  const xs = pts.map(p => p.x).sort((a, b) => a - b); const R = 15 * k, gap = 2 * R + 6 * k, cx = (curView === 'iso_open' || curView === 'iso_wired') ? xs[Math.floor(xs.length * 0.45)] + 0.5 : (minX + maxX) / 2;
+  const maxStack = Math.max(1, ...pts.map(p => p.its.length));
+  const colL = Math.max(R + 12 * k + (maxStack - 1) * 2 * R, minX - 46 * k), colR = Math.min(W - R - 12 * k - (maxStack - 1) * 2 * R, maxX + 46 * k);
+  const band = p => Math.round(p.y / (40 * k));
+  const sides = [pts.filter(p => p.x < cx).sort((a, b) => band(a) - band(b) || a.x - b.x), pts.filter(p => p.x >= cx).sort((a, b) => band(a) - band(b) || b.x - a.x)];
+  sides.forEach((arr, si) => {
+    const top = 70 * k, bot = H - 30 * k;
+    arr.forEach((p, i) => { p.by = Math.max(p.y, i ? arr[i - 1].by + gap : top); });
+    for (let i = arr.length - 1; i >= 0; i--) { const lim = i === arr.length - 1 ? bot : arr[i + 1].by - gap; if (arr[i].by > lim) arr[i].by = lim; }
+    arr.forEach(p => { p.bx = si ? colR : colL; });
+  });
+  og.lineWidth = 1.2 * k; og.font = `700 ${13 * k}px Inter, Arial, sans-serif`; og.textAlign = 'center'; og.textBaseline = 'middle';
+  [...sides[0], ...sides[1]].forEach(p => {
+    const left = p.bx < cx; const sx = p.bx + (left ? R : -R);
+    og.strokeStyle = '#1d2329'; og.beginPath(); og.moveTo(sx, p.by); og.lineTo(p.x, p.y); og.stroke();
+    og.fillStyle = '#1d2329'; og.beginPath(); og.arc(p.x, p.y, 2.6 * k, 0, 7); og.fill();
+    p.its.forEach((it, j) => { const bx = p.bx + (left ? -1 : 1) * j * 2 * R;
+      og.fillStyle = '#ffffff'; og.beginPath(); og.arc(bx, p.by, R, 0, 7); og.fill(); og.stroke();
+      og.fillStyle = '#1d2329'; og.fillText(String(it.item), bx, p.by + 0.5 * k); });
+    if (showTags) { const ex = p.bx + (left ? -1 : 1) * ((p.its.length - 1) * 2 * R + R + 5 * k);
+      og.font = `600 ${11.5 * k}px Inter, Arial, sans-serif`; og.textAlign = left ? 'right' : 'left'; og.fillStyle = '#3a4148';
+      og.fillText(p.its.map(i => i.tag).join(', '), ex, p.by); og.font = `700 ${13 * k}px Inter, Arial, sans-serif`; og.textAlign = 'center'; }
+  });
+}
+document.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => view(b.dataset.v)));
+document.getElementById('skin').addEventListener('click', () => { skin = skin === 'm4' ? 'fx' : 'm4'; applySkin();
+  if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'ctrlStyle', style: skin }, '*'); });   // tell the host page
+addEventListener('message', e => { const d = e.data;   // host page toggle -> switch here without echoing back
+  if (!d || d.type !== 'ctrlStyle' || (d.style !== 'm4' && d.style !== 'fx') || d.style === skin) return;
+  skin = d.style; applySkin(); });
+document.getElementById('ang').addEventListener('input', e => { const v = +e.target.value; if (EXPL.e > 0) { EXPL.e = 0; applyState(); } angT = v; driver = 'panel'; solveTargets(); });
+document.getElementById('expl').addEventListener('input', e => setExplode(+e.target.value / 100));
+document.getElementById('dang').addEventListener('input', e => { const v = +e.target.value; if (EXPL.e > 0) { EXPL.e = 0; applyState(); } doorT = v; driver = 'door'; doorShown = true; solveTargets(); });
+['ang', 'dang'].forEach(id => { const el = document.getElementById(id);
+  el.addEventListener('pointerdown', () => { dragging = id; });
+  addEventListener('pointerup', () => { if (dragging === id) { dragging = null; applyState(); } }); });
+document.getElementById('wall').addEventListener('change', e => { cutWall = e.target.checked; applyState(); });
+document.getElementById('bal').addEventListener('change', e => { showBal = e.target.checked; });
+document.getElementById('tags').addEventListener('change', e => { showTags = e.target.checked; });
+document.getElementById('wires').addEventListener('change', e => { showWires = e.target.checked; applyDuct(); });
+document.getElementById('ductcb').addEventListener('change', e => { showDuct = e.target.checked; applyDuct(); });
+document.getElementById('covers').addEventListener('change', e => { showCovers = e.target.checked; applyDuct(); });
+function resize() { renderer.setSize(innerWidth, innerHeight, false); setCam(); }
+addEventListener('resize', resize);
+if (qs.get('skin') === 'fx') { skin = 'fx'; }
+if (qs.get('tags')) { showTags = true; document.getElementById('tags').checked = true; }
+if (qs.get('wires')) { showWires = true; document.getElementById('wires').checked = true; }
+if (qs.get('duct') === '0') { showDuct = false; document.getElementById('ductcb').checked = false; }
+if (qs.get('covers') === '0') { showCovers = false; document.getElementById('covers').checked = false; }
+applyDuct();
+if (showBal) document.getElementById('bal').checked = true;
+applySkin();
+shadowize(scene);
+view(qs.get('view') || 'iso_open'); resize();
+const STILL = !!qs.get('still');
+let frame = 0;
+let lastT = performance.now();
+if (!STILL) (function loop() { const now = performance.now(), dt = Math.min(0.05, (now - lastT) / 1000); lastT = now; tick(dt); renderer.render(scene, camera); if ((frame++ & 3) === 0) drawBalloons(); requestAnimationFrame(loop); })();
+await new Promise(res => { const t0 = performance.now(); (function chk() { const ok = Object.values(TEX).every(t => t.image && t.image.complete); if (ok || performance.now() - t0 > 8000) res(); else setTimeout(chk, 100); })(); });
+if (STILL) { renderer.setPixelRatio(1); resize(); renderer.render(scene, camera); drawBalloons(); }
+window.__ready = true;
+})();
+</script>
+</body>
+</html>
